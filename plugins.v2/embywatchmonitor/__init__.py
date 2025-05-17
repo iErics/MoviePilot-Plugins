@@ -7,12 +7,13 @@ from app.core.event import eventmanager
 from app.db.subscribe_oper import SubscribeOper
 from app.helper.rule import RuleHelper
 from app.log import logger
+from app.plugins import _PluginBase
 from app.modules.emby.emby import Emby
 from app.scheduler import Scheduler
 from app.schemas.types import EventType, MediaType
 
 
-class EmbyWatchMonitor:
+class EmbyWatchMonitor(_PluginBase):
     # 插件基本信息
     plugin_name = "Emby追更"
     plugin_desc = "监控Emby用户正在观看的剧集，管理订阅规则并定期刷新更新"
