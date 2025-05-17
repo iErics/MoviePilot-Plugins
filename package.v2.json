@@ -3,12 +3,9 @@
         "name": "Emby追更",
         "description": "监控Emby用户正在观看的剧集，管理订阅规则并定期刷新更新",
         "labels": "Emby,订阅",
-        "version": "1.0",
+        "version": "1.0.1",
         "icon": "Bard_A.png",
         "author": "iErics",
-        "level": 2,
-        "history": {
-
-        }
+        "level": 2
     }
 }
