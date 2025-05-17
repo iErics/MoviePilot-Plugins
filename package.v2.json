@@ -1,5 +1,5 @@
 {
-    "SiteStatistic": {
+    "embywatchmonitor": {
         "name": "Emby追更",
         "description": "监控Emby用户正在观看的剧集，管理订阅规则并定期刷新更新",
         "labels": "Emby,订阅",
