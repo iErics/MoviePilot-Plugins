@@ -44,6 +44,7 @@ class EmbyWatchAccelerator(_PluginBase):
     _user_whitelist: str = ""
     _user_blacklist: str = ""
     _max_log_records: int = 200
+    _run_once: bool = False
 
     def init_plugin(self, config: dict = None):
         # 停止现有任务
@@ -57,6 +58,25 @@ class EmbyWatchAccelerator(_PluginBase):
             self._resume_days = int(config.get("resume_days") or 30)
             self._user_whitelist = (config.get("user_whitelist") or "").strip()
             self._user_blacklist = (config.get("user_blacklist") or "").strip()
+            self._run_once = bool(config.get("run_once"))
+
+        if self._run_once:
+            if self._enabled:
+                self._append_log("检测到立即运行开关，开始执行一次加速任务")
+                self._process(mode="accelerate")
+            else:
+                self._append_log("立即运行开关已开启，但插件未启用，跳过执行", "WARNING")
+            self._run_once = False
+            self.update_config({
+                "enabled": self._enabled,
+                "accelerate_interval_minutes": self._accelerate_interval_minutes,
+                "backfill_interval_hours": self._backfill_interval_hours,
+                "resume_limit": self._resume_limit,
+                "resume_days": self._resume_days,
+                "user_whitelist": self._user_whitelist,
+                "user_blacklist": self._user_blacklist,
+                "run_once": False
+            })
 
     def get_state(self) -> bool:
         return self._enabled
@@ -202,6 +222,19 @@ class EmbyWatchAccelerator(_PluginBase):
                             },
                             {
                                 "component": "VCol",
+                                "props": {"cols": 12, "md": 4},
+                                "content": [
+                                    {
+                                        "component": "VSwitch",
+                                        "props": {
+                                            "model": "run_once",
+                                            "label": "保存后立即运行一次"
+                                        }
+                                    }
+                                ]
+                            },
+                            {
+                                "component": "VCol",
                                 "props": {"cols": 12, "md": 8},
                                 "content": [
                                     {
@@ -225,7 +258,8 @@ class EmbyWatchAccelerator(_PluginBase):
             "resume_limit": 50,
             "resume_days": 30,
             "user_whitelist": "",
-            "user_blacklist": ""
+            "user_blacklist": "",
+            "run_once": False
         }
 
     def get_page(self) -> Optional[List[dict]]:
@@ -502,27 +536,46 @@ class EmbyWatchAccelerator(_PluginBase):
 
     def _merge_resume_series(self, items: List[dict]) -> List[dict]:
         series_map: Dict[str, dict] = {}
+        reason_counter = {
+            "missing_series_or_season": 0,
+            "invalid_last_played": 0,
+            "out_of_resume_days": 0,
+            "missing_last_played_with_days_filter": 0,
+            "duplicate_older": 0
+        }
         now = datetime.datetime.now()
         for item in items:
             series_id = item.get("SeriesId")
             season = item.get("ParentIndexNumber")
             episode = item.get("IndexNumber")
             if not series_id or not season:
+                reason_counter["missing_series_or_season"] += 1
+                logger.info(f"排除继续观看条目：缺少SeriesId或Season，item_id={item.get('Id')}")
                 continue
             key = f"{series_id}:{season}"
             last_played = item.get("UserData", {}).get("LastPlayedDate")
-            if last_played and "." in last_played:
-                last_played = last_played.split(".")[0]
-            last_played_dt = None
-            if last_played:
-                try:
-                    last_played_dt = datetime.datetime.strptime(last_played, "%Y-%m-%dT%H:%M:%S")
-                except Exception:
-                    last_played_dt = None
+            last_played_dt = self._parse_last_played(last_played)
             if self._resume_days and last_played_dt:
                 if (now - last_played_dt).days > self._resume_days:
+                    reason_counter["out_of_resume_days"] += 1
+                    logger.info(
+                        f"排除继续观看条目：超出天数范围，series_id={series_id}，season={season}，"
+                        f"last_played={last_played_dt.strftime('%Y-%m-%d %H:%M:%S')}"
+                    )
                     continue
             elif self._resume_days and not last_played_dt:
+                if last_played:
+                    reason_counter["invalid_last_played"] += 1
+                    logger.info(
+                        f"排除继续观看条目：LastPlayedDate无法解析，series_id={series_id}，"
+                        f"season={season}，raw={last_played}"
+                    )
+                else:
+                    reason_counter["missing_last_played_with_days_filter"] += 1
+                    logger.info(
+                        f"排除继续观看条目：缺少LastPlayedDate且启用了天数过滤，"
+                        f"series_id={series_id}，season={season}"
+                    )
                 continue
             record = series_map.get(key)
             if not record or (last_played_dt and last_played_dt > record.get("last_played", datetime.datetime.min)):
@@ -532,8 +585,41 @@ class EmbyWatchAccelerator(_PluginBase):
                     "episode": int(episode) if episode else None,
                     "last_played": last_played_dt or datetime.datetime.min
                 }
+            else:
+                reason_counter["duplicate_older"] += 1
+                logger.info(
+                    f"排除继续观看条目：同剧同季重复且较旧，series_id={series_id}，season={season}"
+                )
+        logger.info(
+            "继续观看过滤统计："
+            f"缺少series/season={reason_counter['missing_series_or_season']}，"
+            f"时间解析失败={reason_counter['invalid_last_played']}，"
+            f"超出天数={reason_counter['out_of_resume_days']}，"
+            f"缺少时间={reason_counter['missing_last_played_with_days_filter']}，"
+            f"重复较旧={reason_counter['duplicate_older']}"
+        )
         logger.info(f"继续观看去重后剧集数：{len(series_map)}")
         return list(series_map.values())
+
+    @staticmethod
+    def _parse_last_played(last_played: Optional[str]) -> Optional[datetime.datetime]:
+        if not last_played:
+            return None
+        raw = str(last_played).strip()
+        if raw.endswith("Z"):
+            raw = raw[:-1] + "+00:00"
+        try:
+            parsed = datetime.datetime.fromisoformat(raw)
+            if parsed.tzinfo:
+                return parsed.astimezone(datetime.timezone.utc).replace(tzinfo=None)
+            return parsed
+        except Exception:
+            try:
+                if "." in raw:
+                    raw = raw.split(".")[0]
+                return datetime.datetime.strptime(raw, "%Y-%m-%dT%H:%M:%S")
+            except Exception:
+                return None
 
     def _get_mediainfo(self, series_info) -> Optional[MediaInfo]:
         mediainfo = None
