@@ -23,7 +23,7 @@ class EmbyWatchAccelerator(_PluginBase):
     # 插件图标
     plugin_icon = "download.png"
     # 插件版本
-    plugin_version = "1.0"
+    plugin_version = "1.0.1"
     # 插件作者
     plugin_author = "codex"
     # 作者主页
@@ -540,7 +540,7 @@ class EmbyWatchAccelerator(_PluginBase):
             "missing_series_or_season": 0,
             "invalid_last_played": 0,
             "out_of_resume_days": 0,
-            "missing_last_played_with_days_filter": 0,
+            "missing_last_played_kept": 0,
             "duplicate_older": 0
         }
         now = datetime.datetime.now()
@@ -548,9 +548,10 @@ class EmbyWatchAccelerator(_PluginBase):
             series_id = item.get("SeriesId")
             season = item.get("ParentIndexNumber")
             episode = item.get("IndexNumber")
+            item_desc = self._resume_item_desc(item)
             if not series_id or not season:
                 reason_counter["missing_series_or_season"] += 1
-                logger.info(f"排除继续观看条目：缺少SeriesId或Season，item_id={item.get('Id')}")
+                logger.info(f"排除继续观看条目：缺少SeriesId或Season，{item_desc}")
                 continue
             key = f"{series_id}:{season}"
             last_played = item.get("UserData", {}).get("LastPlayedDate")
@@ -559,7 +560,7 @@ class EmbyWatchAccelerator(_PluginBase):
                 if (now - last_played_dt).days > self._resume_days:
                     reason_counter["out_of_resume_days"] += 1
                     logger.info(
-                        f"排除继续观看条目：超出天数范围，series_id={series_id}，season={season}，"
+                        f"排除继续观看条目：超出天数范围，{item_desc}，"
                         f"last_played={last_played_dt.strftime('%Y-%m-%d %H:%M:%S')}"
                     )
                     continue
@@ -567,16 +568,11 @@ class EmbyWatchAccelerator(_PluginBase):
                 if last_played:
                     reason_counter["invalid_last_played"] += 1
                     logger.info(
-                        f"排除继续观看条目：LastPlayedDate无法解析，series_id={series_id}，"
-                        f"season={season}，raw={last_played}"
+                        f"继续保留条目：LastPlayedDate无法解析，{item_desc}，raw={last_played}"
                     )
                 else:
-                    reason_counter["missing_last_played_with_days_filter"] += 1
-                    logger.info(
-                        f"排除继续观看条目：缺少LastPlayedDate且启用了天数过滤，"
-                        f"series_id={series_id}，season={season}"
-                    )
-                continue
+                    reason_counter["missing_last_played_kept"] += 1
+                    logger.info(f"继续保留条目：缺少LastPlayedDate，{item_desc}")
             record = series_map.get(key)
             if not record or (last_played_dt and last_played_dt > record.get("last_played", datetime.datetime.min)):
                 series_map[key] = {
@@ -587,15 +583,13 @@ class EmbyWatchAccelerator(_PluginBase):
                 }
             else:
                 reason_counter["duplicate_older"] += 1
-                logger.info(
-                    f"排除继续观看条目：同剧同季重复且较旧，series_id={series_id}，season={season}"
-                )
+                logger.info(f"排除继续观看条目：同剧同季重复且较旧，{item_desc}")
         logger.info(
             "继续观看过滤统计："
             f"缺少series/season={reason_counter['missing_series_or_season']}，"
-            f"时间解析失败={reason_counter['invalid_last_played']}，"
+            f"时间解析失败(保留)={reason_counter['invalid_last_played']}，"
             f"超出天数={reason_counter['out_of_resume_days']}，"
-            f"缺少时间={reason_counter['missing_last_played_with_days_filter']}，"
+            f"缺少时间(保留)={reason_counter['missing_last_played_kept']}，"
             f"重复较旧={reason_counter['duplicate_older']}"
         )
         logger.info(f"继续观看去重后剧集数：{len(series_map)}")
@@ -620,6 +614,14 @@ class EmbyWatchAccelerator(_PluginBase):
                 return datetime.datetime.strptime(raw, "%Y-%m-%dT%H:%M:%S")
             except Exception:
                 return None
+
+    @staticmethod
+    def _resume_item_desc(item: Dict[str, Any]) -> str:
+        series_name = item.get("SeriesName") or item.get("Name") or "未知剧集"
+        season = item.get("ParentIndexNumber")
+        episode = item.get("IndexNumber")
+        item_id = item.get("Id")
+        return f"title={series_name}，S{season}E{episode}，item_id={item_id}"
 
     def _get_mediainfo(self, series_info) -> Optional[MediaInfo]:
         mediainfo = None
