@@ -43,6 +43,7 @@ class EmbyWatchAccelerator(_PluginBase):
     _resume_days: int = 30
     _user_whitelist: str = ""
     _user_blacklist: str = ""
+    _max_log_records: int = 200
 
     def init_plugin(self, config: dict = None):
         # 停止现有任务
@@ -229,6 +230,7 @@ class EmbyWatchAccelerator(_PluginBase):
 
     def get_page(self) -> Optional[List[dict]]:
         stats = self.get_data("last_stats") or {}
+        logs = self.get_data("logs") or []
         items = [
             {"label": "上次运行时间", "value": stats.get("finished_at") or "-"},
             {"label": "上次运行模式", "value": stats.get("mode") or "-"},
@@ -273,6 +275,36 @@ class EmbyWatchAccelerator(_PluginBase):
                         ]
                     }
                 ]
+            },
+            {
+                "component": "VCard",
+                "props": {
+                    "variant": "outlined",
+                    "class": "pa-3 mt-3"
+                },
+                "content": [
+                    {
+                        "component": "VCardTitle",
+                        "props": {"class": "text-subtitle-1"},
+                        "text": "最近日志"
+                    },
+                    {
+                        "component": "VDivider"
+                    },
+                    {
+                        "component": "VList",
+                        "props": {"density": "compact"},
+                        "content": [
+                            {
+                                "component": "VListItem",
+                                "props": {"class": "py-1"},
+                                "content": [
+                                    {"component": "VListItemTitle", "text": item}
+                                ]
+                            } for item in (logs[-50:] if logs else ["暂无日志"])
+                        ]
+                    }
+                ]
             }
         ]
 
@@ -285,11 +317,21 @@ class EmbyWatchAccelerator(_PluginBase):
     def _run_backfill(self):
         self._process(mode="backfill")
 
+    def _append_log(self, message: str, level: str = "INFO") -> None:
+        now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        line = f"[{now}] [{level}] {message}"
+        logs = self.get_data("logs") or []
+        logs.append(line)
+        if len(logs) > self._max_log_records:
+            logs = logs[-self._max_log_records:]
+        self.save_data("logs", logs)
+
     def _process(self, mode: str):
         if not self._enabled:
             return
         if not _lock.acquire(blocking=False):
             logger.info("继续观看加速任务正在运行，跳过本次执行")
+            self._append_log("继续观看加速任务正在运行，跳过本次执行")
             return
         start_time = datetime.datetime.now()
         stats = {
@@ -307,14 +349,17 @@ class EmbyWatchAccelerator(_PluginBase):
         }
         try:
             logger.info(f"继续观看加速任务开始，模式：{mode}")
+            self._append_log(f"继续观看加速任务开始，模式：{mode}")
             services = MediaServerHelper().get_services()
             if not services:
                 logger.info("未检测到媒体服务器配置，任务结束")
+                self._append_log("未检测到媒体服务器配置，任务结束")
                 return
             for name, service in services.items():
                 if not service or service.type != "emby" or not service.instance:
                     continue
                 logger.info(f"开始处理Emby服务器：{name}")
+                self._append_log(f"开始处理Emby服务器：{name}")
                 stats["servers"] += 1
                 self._process_emby_service(service.instance, mode=mode, stats=stats)
         finally:
@@ -332,6 +377,11 @@ class EmbyWatchAccelerator(_PluginBase):
                 f"跳过非电视剧：{stats['skipped_non_tv']}，"
                 f"跳过识别失败：{stats['skipped_no_mediainfo']}，"
                 f"跳过详情失败：{stats['skipped_no_seriesinfo']}"
+            )
+            self._append_log(
+                f"任务结束，模式：{mode}，耗时：{cost:.2f}秒，"
+                f"加速尝试/下载：{stats['accelerate_attempts']}/{stats['accelerate_downloads']}，"
+                f"补全尝试/下载：{stats['backfill_attempts']}/{stats['backfill_downloads']}"
             )
             _lock.release()
 
@@ -420,10 +470,12 @@ class EmbyWatchAccelerator(_PluginBase):
                 continue
             url = (f"[HOST]emby/Users/{user_id}/Items/Resume"
                    "?Limit=100&MediaTypes=Video"
-                   "&Fields=ProviderIds,SeriesId,ParentIndexNumber,IndexNumber,ProductionYear,Path")
+                   "&Fields=ProviderIds,SeriesId,ParentIndexNumber,IndexNumber,ProductionYear,Path"
+                   "&api_key=[APIKEY]")
             res = emby.get_data(url)
             if not res or res.status_code != 200:
-                logger.error(f"获取Emby继续观看数据失败：{user.get('Name') or user_id}")
+                code = res.status_code if res else "no-response"
+                logger.error(f"获取Emby继续观看数据失败：{user.get('Name') or user_id}，status={code}")
                 continue
             items = res.json().get("Items") or []
             episode_items = [item for item in items if item.get("Type") == "Episode"]
