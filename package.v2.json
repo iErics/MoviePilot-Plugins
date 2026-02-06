@@ -3,11 +3,12 @@
     "name": "Emby继续观看加速",
     "description": "基于Emby继续观看的剧集记录，自动搜索并加速更新或补全缺失剧集。",
     "labels": "Emby,追剧,补全",
-    "version": "1.0.1",
+    "version": "1.0.2",
     "icon": "download.png",
     "author": "codex",
     "level": 2,
     "history": {
+      "v1.0.2": "增加继续观看候选与缺失季集的关键日志输出",
       "v1.0.1": "优化继续观看过滤日志可读性，支持保存后立即运行一次，修复Resume接口参数与过滤策略",
       "v1.0": "首个版本"
     }
