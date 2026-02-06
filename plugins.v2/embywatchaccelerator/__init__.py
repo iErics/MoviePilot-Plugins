@@ -478,6 +478,7 @@ class EmbyWatchAccelerator(_PluginBase):
 
             if no_exists:
                 logger.info(f"{mediainfo.title_year} 状态：{status_text}，存在缺失集，执行补全")
+                logger.info(f"{mediainfo.title_year} 缺失详情：{self._format_no_exists(no_exists)}")
                 stats["backfill_attempts"] += 1
                 if self._backfill_series(search_chain, download_chain, mediainfo, meta, no_exists):
                     stats["backfill_downloads"] += 1
@@ -514,6 +515,8 @@ class EmbyWatchAccelerator(_PluginBase):
             items = res.json().get("Items") or []
             episode_items = [item for item in items if item.get("Type") == "Episode"]
             logger.info(f"用户 {user.get('Name') or user_id} 继续观看剧集数：{len(episode_items)}")
+            for episode_item in episode_items[:per_user_limit]:
+                logger.info(f"继续观看候选：{self._resume_item_desc(episode_item)}")
             all_items.extend(episode_items[:per_user_limit])
             if len(all_items) >= limit:
                 break
@@ -618,10 +621,11 @@ class EmbyWatchAccelerator(_PluginBase):
     @staticmethod
     def _resume_item_desc(item: Dict[str, Any]) -> str:
         series_name = item.get("SeriesName") or item.get("Name") or "未知剧集"
+        episode_name = item.get("Name") or "-"
         season = item.get("ParentIndexNumber")
         episode = item.get("IndexNumber")
         item_id = item.get("Id")
-        return f"title={series_name}，S{season}E{episode}，item_id={item_id}"
+        return f"title={series_name}，episode={episode_name}，S{season}E{episode}，item_id={item_id}"
 
     def _get_mediainfo(self, series_info) -> Optional[MediaInfo]:
         mediainfo = None
@@ -688,3 +692,21 @@ class EmbyWatchAccelerator(_PluginBase):
             source="EmbyResumeBackfill"
         )
         return True
+
+    @staticmethod
+    def _format_no_exists(no_exists: Dict[int, Dict[int, NotExistMediaInfo]]) -> str:
+        parts = []
+        for _, season_map in (no_exists or {}).items():
+            for season, info in (season_map or {}).items():
+                episodes = info.episodes or []
+                if episodes:
+                    episodes = sorted(set(episodes))
+                    if len(episodes) <= 20:
+                        ep_text = ",".join(str(ep) for ep in episodes)
+                    else:
+                        ep_text = f"{episodes[0]}-{episodes[-1]}(共{len(episodes)}集)"
+                else:
+                    ep_text = "整季"
+                total = f"/总{info.total_episode}集" if info.total_episode else ""
+                parts.append(f"S{season}:缺[{ep_text}]{total}")
+        return "；".join(parts) if parts else "无"
