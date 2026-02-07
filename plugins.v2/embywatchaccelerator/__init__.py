@@ -447,6 +447,9 @@ class EmbyWatchAccelerator(_PluginBase):
             emby_status = self._get_emby_series_status(emby, series_id)
             is_ended = self._is_ended(mediainfo, emby_status)
             status_text = "已完结" if is_ended else "更新中"
+            logger.info(
+                f"{mediainfo.title_year} 状态判定：Emby={emby_status or '-'}，TMDB={mediainfo.status or '-'}，结果={status_text}"
+            )
 
             if is_ended:
                 if no_exists:
@@ -481,7 +484,7 @@ class EmbyWatchAccelerator(_PluginBase):
         if not users:
             logger.info("用户列表为空，无法获取继续观看")
             return []
-        blacklist_names, blacklist_paths = self._build_library_blacklist_for_server(emby, server_name)
+        blacklist_names, blacklist_paths, blacklist_library_ids = self._build_library_blacklist_for_server(emby, server_name)
         if blacklist_names:
             logger.info(f"媒体库黑名单：{', '.join(sorted(blacklist_names))}")
         all_items: List[dict] = []
@@ -494,7 +497,7 @@ class EmbyWatchAccelerator(_PluginBase):
                 continue
             url = (f"[HOST]emby/Users/{user_id}/Items/Resume"
                    "?Limit=100&MediaTypes=Video"
-                   "&Fields=ProviderIds,SeriesId,ParentIndexNumber,IndexNumber,ProductionYear,Path"
+                   "&Fields=ProviderIds,SeriesId,ParentIndexNumber,IndexNumber,ProductionYear,Path,AncestorIds"
                    "&api_key=[APIKEY]")
             res = emby.get_data(url)
             if not res or res.status_code != 200:
@@ -506,7 +509,11 @@ class EmbyWatchAccelerator(_PluginBase):
             if blacklist_paths:
                 filtered_items = []
                 for episode_item in episode_items:
-                    if self._is_blacklisted_library_item(episode_item, blacklist_paths):
+                    if self._is_blacklisted_library_item(
+                            episode_item,
+                            blacklisted_paths=blacklist_paths,
+                            blacklisted_library_ids=blacklist_library_ids,
+                            blacklisted_library_names=blacklist_names):
                         logger.info(f"媒体库黑名单过滤：{self._resume_item_desc(episode_item)}")
                         if stats is not None:
                             stats["skipped_library_blacklist"] = stats.get("skipped_library_blacklist", 0) + 1
@@ -536,7 +543,7 @@ class EmbyWatchAccelerator(_PluginBase):
         logger.info(f"Emby用户过滤后数量：{len(users)}")
         return users
 
-    def _build_library_blacklist_for_server(self, emby, server_name: str) -> Tuple[set, List[str]]:
+    def _build_library_blacklist_for_server(self, emby, server_name: str) -> Tuple[set, List[str], set]:
         raw = self._library_blacklist or ""
         rules: List[str] = []
         global_rules: List[str] = []
@@ -558,34 +565,58 @@ class EmbyWatchAccelerator(_PluginBase):
                 rules.append(token)
         all_rules = global_rules + rules
         if not all_rules:
-            return set(), []
+            return set(), [], set()
         token_set = set(all_rules)
         library_paths: List[str] = []
+        library_ids: set = set()
         matched_names: set = set()
         try:
             libraries = emby.get_emby_virtual_folders() or []
         except Exception:
             libraries = []
         for lib in libraries:
-            lib_id = str(lib.get("Id") or "").strip().lower()
+            raw_id_keys = [lib.get("Id"), lib.get("ItemId"), lib.get("CollectionFolderId")]
+            lib_ids = [str(raw_id).strip().lower() for raw_id in raw_id_keys if raw_id]
             lib_name = str(lib.get("Name") or "").strip().lower()
-            if lib_id in token_set or lib_name in token_set:
+            if any(lib_id in token_set for lib_id in lib_ids) or lib_name in token_set:
                 if lib.get("Name"):
                     matched_names.add(str(lib.get("Name")))
-                for path in (lib.get("Path") or []):
+                for lib_id in lib_ids:
+                    library_ids.add(lib_id)
+                raw_paths = lib.get("Path") or []
+                if isinstance(raw_paths, str):
+                    raw_paths = [raw_paths]
+                for path in raw_paths:
                     normalized = str(path).replace("\\", "/").lower().rstrip("/")
                     if normalized:
                         library_paths.append(normalized)
-        return matched_names, library_paths
+        return matched_names, library_paths, library_ids
 
     @staticmethod
-    def _is_blacklisted_library_item(item: Dict[str, Any], blacklisted_paths: List[str]) -> bool:
-        item_path = str(item.get("Path") or "").replace("\\", "/").lower().rstrip("/")
-        if not item_path:
-            return False
-        for base in blacklisted_paths:
-            if item_path.startswith(base):
+    def _is_blacklisted_library_item(
+            item: Dict[str, Any],
+            blacklisted_paths: List[str],
+            blacklisted_library_ids: Optional[set] = None,
+            blacklisted_library_names: Optional[set] = None) -> bool:
+        # 先按祖先库ID匹配，兼容Path为空或路径不一致场景
+        if blacklisted_library_ids:
+            ancestor_ids = {str(ancestor).strip().lower() for ancestor in (item.get("AncestorIds") or []) if ancestor}
+            if ancestor_ids.intersection(blacklisted_library_ids):
                 return True
+
+        item_path = str(item.get("Path") or "").replace("\\", "/").lower().rstrip("/")
+        if item_path:
+            for base in blacklisted_paths:
+                if item_path.startswith(base):
+                    return True
+            # 名称兜底，处理部分Emby场景下虚拟库路径与条目路径前缀无法直接对齐
+            if blacklisted_library_names:
+                for library_name in blacklisted_library_names:
+                    lib_lower = str(library_name).strip().lower()
+                    if not lib_lower:
+                        continue
+                    if f"/{lib_lower}/" in item_path or item_path.endswith(f"/{lib_lower}"):
+                        return True
         return False
 
     def _merge_resume_series(self, items: List[dict]) -> List[dict]:
@@ -761,11 +792,14 @@ class EmbyWatchAccelerator(_PluginBase):
     def _get_emby_series_status(emby, series_id: str) -> Optional[str]:
         if not series_id:
             return None
-        url = f"[HOST]emby/Users/[USER]/Items/{series_id}?Fields=Status&api_key=[APIKEY]"
+        url = f"[HOST]emby/Users/[USER]/Items/{series_id}?Fields=Status,EndDate&api_key=[APIKEY]"
         res = emby.get_data(url)
         if not res or res.status_code != 200:
             return None
         data = res.json() or {}
+        end_date = data.get("EndDate")
+        if end_date:
+            return "ended"
         return data.get("Status")
 
     def _backfill_series(self, search_chain: SearchChain, download_chain: DownloadChain,
