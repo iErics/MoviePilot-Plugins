@@ -23,7 +23,7 @@ class EmbyWatchAccelerator(_PluginBase):
     # 插件图标
     plugin_icon = "download.png"
     # 插件版本
-    plugin_version = "1.0.2"
+    plugin_version = "1.0.3"
     # 插件作者
     plugin_author = "codex"
     # 作者主页
@@ -43,6 +43,7 @@ class EmbyWatchAccelerator(_PluginBase):
     _resume_days: int = 30
     _user_whitelist: str = ""
     _user_blacklist: str = ""
+    _backfill_stats_only: bool = False
     _max_log_records: int = 200
     _run_once: bool = False
 
@@ -58,6 +59,7 @@ class EmbyWatchAccelerator(_PluginBase):
             self._resume_days = int(config.get("resume_days") or 30)
             self._user_whitelist = (config.get("user_whitelist") or "").strip()
             self._user_blacklist = (config.get("user_blacklist") or "").strip()
+            self._backfill_stats_only = bool(config.get("backfill_stats_only"))
             self._run_once = bool(config.get("run_once"))
 
         if self._run_once:
@@ -75,6 +77,7 @@ class EmbyWatchAccelerator(_PluginBase):
                 "resume_days": self._resume_days,
                 "user_whitelist": self._user_whitelist,
                 "user_blacklist": self._user_blacklist,
+                "backfill_stats_only": self._backfill_stats_only,
                 "run_once": False
             })
 
@@ -114,140 +117,96 @@ class EmbyWatchAccelerator(_PluginBase):
                 "component": "VForm",
                 "content": [
                     {
-                        "component": "VRow",
+                        "component": "VCard",
+                        "props": {"variant": "outlined", "class": "pa-3 mb-3"},
                         "content": [
+                            {"component": "VCardTitle", "text": "执行开关"},
+                            {"component": "VDivider", "props": {"class": "mb-2"}},
                             {
-                                "component": "VCol",
-                                "props": {"cols": 12, "md": 4},
+                                "component": "VRow",
                                 "content": [
                                     {
-                                        "component": "VSwitch",
-                                        "props": {
-                                            "model": "enabled",
-                                            "label": "启用插件"
-                                        }
-                                    }
-                                ]
-                            },
-                            {
-                                "component": "VCol",
-                                "props": {"cols": 12, "md": 4},
-                                "content": [
+                                        "component": "VCol",
+                                        "props": {"cols": 12, "md": 4},
+                                        "content": [{"component": "VSwitch", "props": {"model": "enabled", "label": "启用插件"}}]
+                                    },
                                     {
-                                        "component": "VTextField",
-                                        "props": {
-                                            "model": "accelerate_interval_minutes",
-                                            "label": "加速更新间隔（分钟）",
-                                            "type": "number",
-                                            "min": 1
-                                        }
-                                    }
-                                ]
-                            },
-                            {
-                                "component": "VCol",
-                                "props": {"cols": 12, "md": 4},
-                                "content": [
+                                        "component": "VCol",
+                                        "props": {"cols": 12, "md": 4},
+                                        "content": [{"component": "VSwitch", "props": {"model": "run_once", "label": "保存后立即运行一次"}}]
+                                    },
                                     {
-                                        "component": "VTextField",
-                                        "props": {
-                                            "model": "backfill_interval_hours",
-                                            "label": "补全缺失间隔（小时）",
-                                            "type": "number",
-                                            "min": 1
-                                        }
+                                        "component": "VCol",
+                                        "props": {"cols": 12, "md": 4},
+                                        "content": [{"component": "VSwitch", "props": {"model": "backfill_stats_only", "label": "仅统计缺失，不执行补全"}}]
                                     }
                                 ]
                             }
                         ]
                     },
                     {
-                        "component": "VRow",
+                        "component": "VCard",
+                        "props": {"variant": "outlined", "class": "pa-3 mb-3"},
                         "content": [
+                            {"component": "VCardTitle", "text": "策略参数"},
+                            {"component": "VDivider", "props": {"class": "mb-2"}},
                             {
-                                "component": "VCol",
-                                "props": {"cols": 12, "md": 4},
+                                "component": "VRow",
                                 "content": [
                                     {
-                                        "component": "VTextField",
-                                        "props": {
-                                            "model": "resume_limit",
-                                            "label": "继续观看读取数量",
-                                            "type": "number",
-                                            "min": 1
-                                        }
-                                    }
-                                ]
-                            },
-                            {
-                                "component": "VCol",
-                                "props": {"cols": 12, "md": 4},
-                                "content": [
+                                        "component": "VCol",
+                                        "props": {"cols": 12, "md": 3},
+                                        "content": [{"component": "VTextField", "props": {"model": "accelerate_interval_minutes", "label": "加速更新间隔（分钟）", "type": "number", "min": 1}}]
+                                    },
                                     {
-                                        "component": "VTextField",
-                                        "props": {
-                                            "model": "resume_days",
-                                            "label": "最近观看天数范围",
-                                            "type": "number",
-                                            "min": 1
-                                        }
-                                    }
-                                ]
-                            },
-                            {
-                                "component": "VCol",
-                                "props": {"cols": 12, "md": 4},
-                                "content": [
+                                        "component": "VCol",
+                                        "props": {"cols": 12, "md": 3},
+                                        "content": [{"component": "VTextField", "props": {"model": "backfill_interval_hours", "label": "补全缺失间隔（小时）", "type": "number", "min": 1}}]
+                                    },
                                     {
-                                        "component": "VTextField",
-                                        "props": {
-                                            "model": "user_whitelist",
-                                            "label": "用户白名单（逗号分隔）"
-                                        }
-                                    }
-                                ]
-                            },
-                            {
-                                "component": "VCol",
-                                "props": {"cols": 12, "md": 4},
-                                "content": [
+                                        "component": "VCol",
+                                        "props": {"cols": 12, "md": 3},
+                                        "content": [{"component": "VTextField", "props": {"model": "resume_limit", "label": "继续观看读取数量", "type": "number", "min": 1}}]
+                                    },
                                     {
-                                        "component": "VTextField",
-                                        "props": {
-                                            "model": "user_blacklist",
-                                            "label": "用户黑名单（逗号分隔）"
-                                        }
-                                    }
-                                ]
-                            },
-                            {
-                                "component": "VCol",
-                                "props": {"cols": 12, "md": 4},
-                                "content": [
-                                    {
-                                        "component": "VSwitch",
-                                        "props": {
-                                            "model": "run_once",
-                                            "label": "保存后立即运行一次"
-                                        }
-                                    }
-                                ]
-                            },
-                            {
-                                "component": "VCol",
-                                "props": {"cols": 12, "md": 8},
-                                "content": [
-                                    {
-                                        "component": "VAlert",
-                                        "props": {
-                                            "type": "info",
-                                            "variant": "tonal",
-                                            "text": "仅处理Emby继续观看中的电视剧；更新中无缺失时走加速更新，有缺失或已完结走补全策略。"
-                                        }
+                                        "component": "VCol",
+                                        "props": {"cols": 12, "md": 3},
+                                        "content": [{"component": "VTextField", "props": {"model": "resume_days", "label": "最近观看天数范围", "type": "number", "min": 0}}]
                                     }
                                 ]
                             }
                         ]
+                    },
+                    {
+                        "component": "VCard",
+                        "props": {"variant": "outlined", "class": "pa-3 mb-3"},
+                        "content": [
+                            {"component": "VCardTitle", "text": "用户过滤"},
+                            {"component": "VDivider", "props": {"class": "mb-2"}},
+                            {
+                                "component": "VRow",
+                                "content": [
+                                    {
+                                        "component": "VCol",
+                                        "props": {"cols": 12, "md": 6},
+                                        "content": [{"component": "VTextField", "props": {"model": "user_whitelist", "label": "用户白名单（逗号分隔）"}}]
+                                    },
+                                    {
+                                        "component": "VCol",
+                                        "props": {"cols": 12, "md": 6},
+                                        "content": [{"component": "VTextField", "props": {"model": "user_blacklist", "label": "用户黑名单（逗号分隔）"}}]
+                                    }
+                                ]
+                            }
+                        ]
+                    },
+                    {
+                        "component": "VAlert",
+                        "props": {
+                            "type": "info",
+                            "variant": "tonal",
+                            "text": "仅处理Emby继续观看中的电视剧。开启“仅统计缺失”后，只记录缺失季集，不会执行补全下载。"
+                        }
                     }
                 ]
             }
@@ -259,6 +218,7 @@ class EmbyWatchAccelerator(_PluginBase):
             "resume_days": 30,
             "user_whitelist": "",
             "user_blacklist": "",
+            "backfill_stats_only": False,
             "run_once": False
         }
 
@@ -275,6 +235,7 @@ class EmbyWatchAccelerator(_PluginBase):
             {"label": "处理剧集数", "value": stats.get("processed_series") or 0},
             {"label": "加速尝试/下载", "value": f"{stats.get('accelerate_attempts') or 0}/{stats.get('accelerate_downloads') or 0}"},
             {"label": "补全尝试/下载", "value": f"{stats.get('backfill_attempts') or 0}/{stats.get('backfill_downloads') or 0}"},
+            {"label": "仅统计跳过补全", "value": stats.get("backfill_skipped_stats_only") or 0},
             {"label": "跳过非电视剧", "value": stats.get("skipped_non_tv") or 0},
             {"label": "跳过识别失败", "value": stats.get("skipped_no_mediainfo") or 0},
             {"label": "跳过详情失败", "value": stats.get("skipped_no_seriesinfo") or 0}
@@ -377,6 +338,7 @@ class EmbyWatchAccelerator(_PluginBase):
             "accelerate_downloads": 0,
             "backfill_attempts": 0,
             "backfill_downloads": 0,
+            "backfill_skipped_stats_only": 0,
             "skipped_non_tv": 0,
             "skipped_no_mediainfo": 0,
             "skipped_no_seriesinfo": 0
@@ -408,6 +370,7 @@ class EmbyWatchAccelerator(_PluginBase):
                 f"去重剧集数：{stats['series_items']}，处理剧集数：{stats['processed_series']}，"
                 f"加速尝试/下载：{stats['accelerate_attempts']}/{stats['accelerate_downloads']}，"
                 f"补全尝试/下载：{stats['backfill_attempts']}/{stats['backfill_downloads']}，"
+                f"仅统计跳过补全：{stats['backfill_skipped_stats_only']}，"
                 f"跳过非电视剧：{stats['skipped_non_tv']}，"
                 f"跳过识别失败：{stats['skipped_no_mediainfo']}，"
                 f"跳过详情失败：{stats['skipped_no_seriesinfo']}"
@@ -415,7 +378,8 @@ class EmbyWatchAccelerator(_PluginBase):
             self._append_log(
                 f"任务结束，模式：{mode}，耗时：{cost:.2f}秒，"
                 f"加速尝试/下载：{stats['accelerate_attempts']}/{stats['accelerate_downloads']}，"
-                f"补全尝试/下载：{stats['backfill_attempts']}/{stats['backfill_downloads']}"
+                f"补全尝试/下载：{stats['backfill_attempts']}/{stats['backfill_downloads']}，"
+                f"仅统计跳过补全：{stats['backfill_skipped_stats_only']}"
             )
             _lock.release()
 
@@ -472,7 +436,10 @@ class EmbyWatchAccelerator(_PluginBase):
                 if no_exists:
                     logger.info(f"{mediainfo.title_year} 状态：{status_text}，执行补全")
                     stats["backfill_attempts"] += 1
-                    if self._backfill_series(search_chain, download_chain, mediainfo, meta, no_exists):
+                    if self._backfill_stats_only:
+                        logger.info(f"{mediainfo.title_year} 仅统计缺失模式，跳过补全下载")
+                        stats["backfill_skipped_stats_only"] += 1
+                    elif self._backfill_series(search_chain, download_chain, mediainfo, meta, no_exists):
                         stats["backfill_downloads"] += 1
                 continue
 
@@ -480,7 +447,10 @@ class EmbyWatchAccelerator(_PluginBase):
                 logger.info(f"{mediainfo.title_year} 状态：{status_text}，存在缺失集，执行补全")
                 logger.info(f"{mediainfo.title_year} 缺失详情：{self._format_no_exists(no_exists)}")
                 stats["backfill_attempts"] += 1
-                if self._backfill_series(search_chain, download_chain, mediainfo, meta, no_exists):
+                if self._backfill_stats_only:
+                    logger.info(f"{mediainfo.title_year} 仅统计缺失模式，跳过补全下载")
+                    stats["backfill_skipped_stats_only"] += 1
+                elif self._backfill_series(search_chain, download_chain, mediainfo, meta, no_exists):
                     stats["backfill_downloads"] += 1
                 continue
 
