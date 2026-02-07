@@ -26,7 +26,7 @@ class EmbyWatchAccelerator(_PluginBase):
     # 插件图标
     plugin_icon = "download.png"
     # 插件版本
-    plugin_version = "1.0.14"
+    plugin_version = "1.0.15"
     # 插件作者
     plugin_author = "codex"
     # 作者主页
@@ -236,6 +236,8 @@ class EmbyWatchAccelerator(_PluginBase):
 
     def get_page(self) -> Optional[List[dict]]:
         stats = self.get_data("last_stats") or {}
+        if self._hydrate_stats_posters(stats):
+            self.save_data("last_stats", stats)
         logs = self.get_data("logs") or []
         summary_items = [
             {"label": "上次运行时间", "value": stats.get("finished_at") or "-"},
@@ -411,21 +413,117 @@ class EmbyWatchAccelerator(_PluginBase):
         return bucket
 
     def _append_user_media_result(self, stats: Dict[str, Any], user_name: Optional[str], kind: str,
-                                  mediainfo: MediaInfo, season: Optional[int], result: str):
+                                  mediainfo: MediaInfo, season: Optional[int], result: str,
+                                  series_id: Optional[str] = None, server_name: Optional[str] = None,
+                                  emby=None):
         bucket = self._get_user_bucket(stats, user_name)
         target_key = "track_items" if kind == "track" else "backfill_items"
+        poster, poster_source = self._resolve_poster_url(mediainfo=mediainfo, emby=emby, series_id=series_id)
         bucket[target_key].append({
             "title": mediainfo.title,
             "year": mediainfo.year,
             "season": season,
             "result": result,
-            "poster": mediainfo.poster_path,
+            "poster": poster,
+            "poster_source": poster_source,
+            "series_id": str(series_id) if series_id else "",
+            "server": server_name or "",
             "type": str(getattr(mediainfo.type, "value", mediainfo.type) or "电视剧"),
             "time": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         })
+        logger.info(
+            f"统计封面来源：title={mediainfo.title_year}，user={user_name or '-'}，"
+            f"source={poster_source}，has_poster={'是' if bool(poster) else '否'}"
+        )
+
+    def _resolve_poster_url(self, mediainfo: MediaInfo, emby=None, series_id: Optional[str] = None) -> Tuple[str, str]:
+        # 先使用识别链路提供的海报，避免额外网络请求。
+        poster = mediainfo.get_poster_image() if mediainfo else None
+        if poster:
+            return poster, "mediainfo.poster"
+        if mediainfo:
+            backdrop = mediainfo.get_backdrop_image()
+            if backdrop:
+                return backdrop, "mediainfo.backdrop"
+        if emby and series_id:
+            remote = emby.get_remote_image_by_id(series_id, "Primary")
+            if remote:
+                return remote, "emby.remote_primary"
+            local = self._build_emby_image_url(emby=emby, item_id=series_id, image_type="Primary")
+            if local:
+                return local, "emby.local_primary"
+        return "", "none"
+
+    @staticmethod
+    def _build_emby_image_url(emby, item_id: Optional[str], image_type: str = "Primary") -> str:
+        if not emby or not item_id:
+            return ""
+        host = str(getattr(emby, "_host", "") or "")
+        apikey = str(getattr(emby, "_apikey", "") or "")
+        if not host or not apikey:
+            return ""
+        return f"{host}emby/Items/{item_id}/Images/{image_type}?api_key={apikey}"
+
+    def _hydrate_stats_posters(self, stats: Dict[str, Any]) -> bool:
+        services = MediaServerHelper().get_services() or {}
+        user_stats = stats.get("user_stats") or {}
+        changed = False
+        for _, user_info in user_stats.items():
+            for key in ("track_items", "backfill_items"):
+                items = user_info.get(key) or []
+                for item in items:
+                    if item.get("poster"):
+                        continue
+                    series_id = str(item.get("series_id") or "").strip()
+                    server_name = str(item.get("server") or "").strip()
+                    emby = None
+                    if server_name:
+                        service = services.get(server_name)
+                        if service and service.type == "emby" and service.instance:
+                            emby = service.instance
+                    if emby and series_id:
+                        remote = emby.get_remote_image_by_id(series_id, "Primary")
+                        if remote:
+                            item["poster"] = remote
+                            item["poster_source"] = "emby.remote_primary.hydrate"
+                            changed = True
+                            continue
+                        local = self._build_emby_image_url(emby=emby, item_id=series_id, image_type="Primary")
+                        if local:
+                            item["poster"] = local
+                            item["poster_source"] = "emby.local_primary.hydrate"
+                            changed = True
+                            continue
+                    title = item.get("title")
+                    if not title:
+                        continue
+                    meta = MetaInfo(title)
+                    year = item.get("year")
+                    if year:
+                        meta.year = year
+                    meta.type = MediaType.TV
+                    try:
+                        mediainfo = self.chain.recognize_media(meta=meta, mtype=MediaType.TV)
+                    except Exception:
+                        mediainfo = None
+                    if not mediainfo:
+                        continue
+                    poster = mediainfo.get_poster_image() or mediainfo.get_backdrop_image()
+                    if poster:
+                        item["poster"] = poster
+                        item["poster_source"] = "mediainfo.hydrate"
+                        changed = True
+        return changed
 
     @staticmethod
     def _build_user_mode_block(title: str, attempts: int, downloads: int, items: List[Dict[str, Any]]) -> List[dict]:
+        placeholder_poster = (
+            "data:image/svg+xml;utf8,"
+            "<svg xmlns='http://www.w3.org/2000/svg' width='240' height='360' viewBox='0 0 240 360'>"
+            "<rect width='240' height='360' fill='%23eceff1'/>"
+            "<text x='120' y='178' text-anchor='middle' fill='%2390a4ae' font-size='20'>No Cover</text>"
+            "</svg>"
+        )
         cards = []
         for item in (items[-12:] if items else []):
             cards.append({
@@ -443,17 +541,13 @@ class EmbyWatchAccelerator(_PluginBase):
                                     {
                                         "component": "VImg",
                                         "props": {
-                                            "src": item.get("poster"),
+                                            "src": item.get("poster") or placeholder_poster,
                                             "width": 72,
                                             "height": 108,
                                             "aspect-ratio": "2/3",
                                             "class": "rounded mr-2",
                                             "cover": True
                                         }
-                                    } if item.get("poster") else {
-                                        "component": "div",
-                                        "props": {"class": "mr-2", "style": "width:72px;height:108px;"},
-                                        "text": ""
                                     },
                                     {
                                         "component": "div",
@@ -475,6 +569,9 @@ class EmbyWatchAccelerator(_PluginBase):
                                              "text": f"结果：{item.get('result') or '-'}"},
                                             {"component": "VCardText",
                                              "props": {"class": "pa-0"},
+                                             "text": f"封面：{item.get('poster_source') or '-'}"},
+                                            {"component": "VCardText",
+                                             "props": {"class": "pa-0"},
                                              "text": f"时间：{item.get('time') or '-'}"}
                                         ]
                                     }
@@ -486,8 +583,14 @@ class EmbyWatchAccelerator(_PluginBase):
             })
 
         content = [
-            {"component": "VCardSubtitle", "props": {"class": "pa-0 font-bold"}, "text": title},
-            {"component": "VCardText", "props": {"class": "pa-0 mb-2"}, "text": f"尝试/下载：{attempts}/{downloads}"}
+            {
+                "component": "div",
+                "props": {"class": "d-flex justify-space-between align-center mb-2"},
+                "content": [
+                    {"component": "VCardSubtitle", "props": {"class": "pa-0 font-bold"}, "text": title},
+                    {"component": "VCardText", "props": {"class": "pa-0"}, "text": f"尝试/下载：{attempts}/{downloads}"}
+                ]
+            }
         ]
         if cards:
             content.append({"component": "VRow", "content": cards})
@@ -640,19 +743,22 @@ class EmbyWatchAccelerator(_PluginBase):
                         stats["backfill_skipped_stats_only"] += 1
                         self._append_user_media_result(
                             stats=stats, user_name=current_user, kind="backfill",
-                            mediainfo=mediainfo, season=current_season, result="仅统计缺失"
+                            mediainfo=mediainfo, season=current_season, result="仅统计缺失",
+                            series_id=series_id, server_name=server_name, emby=emby
                         )
                     elif self._backfill_series(search_chain, download_chain, mediainfo, meta, no_exists):
                         stats["backfill_downloads"] += 1
                         user_bucket["backfill_downloads"] += 1
                         self._append_user_media_result(
                             stats=stats, user_name=current_user, kind="backfill",
-                            mediainfo=mediainfo, season=current_season, result="已下载"
+                            mediainfo=mediainfo, season=current_season, result="已下载",
+                            series_id=series_id, server_name=server_name, emby=emby
                         )
                     else:
                         self._append_user_media_result(
                             stats=stats, user_name=current_user, kind="backfill",
-                            mediainfo=mediainfo, season=current_season, result="未命中资源"
+                            mediainfo=mediainfo, season=current_season, result="未命中资源",
+                            series_id=series_id, server_name=server_name, emby=emby
                         )
                 continue
 
@@ -666,19 +772,22 @@ class EmbyWatchAccelerator(_PluginBase):
                     stats["backfill_skipped_stats_only"] += 1
                     self._append_user_media_result(
                         stats=stats, user_name=current_user, kind="backfill",
-                        mediainfo=mediainfo, season=current_season, result="仅统计缺失"
+                        mediainfo=mediainfo, season=current_season, result="仅统计缺失",
+                        series_id=series_id, server_name=server_name, emby=emby
                     )
                 elif self._backfill_series(search_chain, download_chain, mediainfo, meta, actionable_no_exists):
                     stats["backfill_downloads"] += 1
                     user_bucket["backfill_downloads"] += 1
                     self._append_user_media_result(
                         stats=stats, user_name=current_user, kind="backfill",
-                        mediainfo=mediainfo, season=current_season, result="已下载"
+                        mediainfo=mediainfo, season=current_season, result="已下载",
+                        series_id=series_id, server_name=server_name, emby=emby
                     )
                 else:
                     self._append_user_media_result(
                         stats=stats, user_name=current_user, kind="backfill",
-                        mediainfo=mediainfo, season=current_season, result="未命中资源"
+                        mediainfo=mediainfo, season=current_season, result="未命中资源",
+                        series_id=series_id, server_name=server_name, emby=emby
                     )
                 continue
             if no_exists and not actionable_no_exists:
@@ -693,12 +802,14 @@ class EmbyWatchAccelerator(_PluginBase):
                     user_bucket["track_downloads"] += 1
                     self._append_user_media_result(
                         stats=stats, user_name=current_user, kind="track",
-                        mediainfo=mediainfo, season=current_season, result="已下载"
+                        mediainfo=mediainfo, season=current_season, result="已下载",
+                        series_id=series_id, server_name=server_name, emby=emby
                     )
                 else:
                     self._append_user_media_result(
                         stats=stats, user_name=current_user, kind="track",
-                        mediainfo=mediainfo, season=current_season, result="未命中资源"
+                        mediainfo=mediainfo, season=current_season, result="未命中资源",
+                        series_id=series_id, server_name=server_name, emby=emby
                     )
 
     def _get_resume_items(self, emby, stats: Optional[Dict[str, int]] = None, server_name: str = "") -> List[dict]:
