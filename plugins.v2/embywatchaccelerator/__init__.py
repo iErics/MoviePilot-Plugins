@@ -26,7 +26,7 @@ class EmbyWatchAccelerator(_PluginBase):
     # 插件图标
     plugin_icon = "download.png"
     # 插件版本
-    plugin_version = "1.0.24"
+    plugin_version = "1.0.25"
     # 插件作者
     plugin_author = "codex"
     # 作者主页
@@ -253,7 +253,7 @@ class EmbyWatchAccelerator(_PluginBase):
                 mode_blocks.append(
                     {
                         "component": "VCol",
-                        "props": {"cols": 12, "class": "pb-0"},
+                        "props": {"cols": 12, "class": "pa-0"},
                         "content": self._build_user_mode_block(
                             title="追更",
                             attempts=0,
@@ -266,7 +266,7 @@ class EmbyWatchAccelerator(_PluginBase):
                 mode_blocks.append(
                     {
                         "component": "VCol",
-                        "props": {"cols": 12, "class": "pt-2"},
+                        "props": {"cols": 12, "class": "pa-0 mt-4"},
                         "content": self._build_user_mode_block(
                             title="补全",
                             attempts=0,
@@ -282,7 +282,7 @@ class EmbyWatchAccelerator(_PluginBase):
                     "content": [
                         {
                             "component": "div",
-                            "props": {"class": "d-flex justify-space-between align-end mb-4"},
+                            "props": {"class": "d-flex justify-space-between align-end mb-3"},
                             "content": [
                                 {
                                     "component": "div",
@@ -479,7 +479,7 @@ class EmbyWatchAccelerator(_PluginBase):
         for item in (items[-12:] if items else []):
             cards.append({
                 "component": "VCol",
-                "props": {"cols": 12, "sm": 6, "md": 4, "lg": 3, "class": "pa-0 pr-3 pb-3"},
+                "props": {"cols": 12, "sm": 6, "md": 4, "lg": 3, "class": "pa-0 pr-4 pb-4"},
                 "content": [
                     {
                         "component": "VCard",
