@@ -25,7 +25,7 @@ class EmbyWatchAccelerator(_PluginBase):
     # 插件图标
     plugin_icon = "download.png"
     # 插件版本
-    plugin_version = "1.0.4"
+    plugin_version = "1.0.6"
     # 插件作者
     plugin_author = "codex"
     # 作者主页
@@ -45,6 +45,7 @@ class EmbyWatchAccelerator(_PluginBase):
     _resume_days: int = 30
     _user_whitelist: str = ""
     _user_blacklist: str = ""
+    _library_blacklist: str = ""
     _backfill_stats_only: bool = False
     _max_log_records: int = 200
     _run_once: bool = False
@@ -61,6 +62,7 @@ class EmbyWatchAccelerator(_PluginBase):
             self._resume_days = int(config.get("resume_days") or 30)
             self._user_whitelist = (config.get("user_whitelist") or "").strip()
             self._user_blacklist = (config.get("user_blacklist") or "").strip()
+            self._library_blacklist = (config.get("library_blacklist") or "").strip()
             self._backfill_stats_only = bool(config.get("backfill_stats_only"))
             self._run_once = bool(config.get("run_once"))
 
@@ -79,6 +81,7 @@ class EmbyWatchAccelerator(_PluginBase):
                 "resume_days": self._resume_days,
                 "user_whitelist": self._user_whitelist,
                 "user_blacklist": self._user_blacklist,
+                "library_blacklist": self._library_blacklist,
                 "backfill_stats_only": self._backfill_stats_only,
                 "run_once": False
             })
@@ -197,6 +200,11 @@ class EmbyWatchAccelerator(_PluginBase):
                                         "component": "VCol",
                                         "props": {"cols": 12, "md": 6},
                                         "content": [{"component": "VTextField", "props": {"model": "user_blacklist", "label": "用户黑名单（逗号分隔）"}}]
+                                    },
+                                    {
+                                        "component": "VCol",
+                                        "props": {"cols": 12, "md": 12},
+                                        "content": [{"component": "VTextarea", "props": {"model": "library_blacklist", "label": "媒体库黑名单（每行：服务器名称:媒体库名称或ID）", "rows": 3, "autoGrow": True}}]
                                     }
                                 ]
                             }
@@ -220,6 +228,7 @@ class EmbyWatchAccelerator(_PluginBase):
             "resume_days": 30,
             "user_whitelist": "",
             "user_blacklist": "",
+            "library_blacklist": "",
             "backfill_stats_only": False,
             "run_once": False
         }
@@ -238,6 +247,7 @@ class EmbyWatchAccelerator(_PluginBase):
             {"label": "加速尝试/下载", "value": f"{stats.get('accelerate_attempts') or 0}/{stats.get('accelerate_downloads') or 0}"},
             {"label": "补全尝试/下载", "value": f"{stats.get('backfill_attempts') or 0}/{stats.get('backfill_downloads') or 0}"},
             {"label": "仅统计跳过补全", "value": stats.get("backfill_skipped_stats_only") or 0},
+            {"label": "媒体库黑名单跳过", "value": stats.get("skipped_library_blacklist") or 0},
             {"label": "跳过非电视剧", "value": stats.get("skipped_non_tv") or 0},
             {"label": "跳过识别失败", "value": stats.get("skipped_no_mediainfo") or 0},
             {"label": "跳过详情失败", "value": stats.get("skipped_no_seriesinfo") or 0}
@@ -341,6 +351,7 @@ class EmbyWatchAccelerator(_PluginBase):
             "backfill_attempts": 0,
             "backfill_downloads": 0,
             "backfill_skipped_stats_only": 0,
+            "skipped_library_blacklist": 0,
             "skipped_non_tv": 0,
             "skipped_no_mediainfo": 0,
             "skipped_no_seriesinfo": 0
@@ -359,7 +370,7 @@ class EmbyWatchAccelerator(_PluginBase):
                 logger.info(f"开始处理Emby服务器：{name}")
                 self._append_log(f"开始处理Emby服务器：{name}")
                 stats["servers"] += 1
-                self._process_emby_service(service.instance, mode=mode, stats=stats)
+                self._process_emby_service(service.instance, mode=mode, stats=stats, server_name=name)
         finally:
             cost = (datetime.datetime.now() - start_time).total_seconds()
             stats["mode"] = mode
@@ -373,6 +384,7 @@ class EmbyWatchAccelerator(_PluginBase):
                 f"加速尝试/下载：{stats['accelerate_attempts']}/{stats['accelerate_downloads']}，"
                 f"补全尝试/下载：{stats['backfill_attempts']}/{stats['backfill_downloads']}，"
                 f"仅统计跳过补全：{stats['backfill_skipped_stats_only']}，"
+                f"媒体库黑名单跳过：{stats['skipped_library_blacklist']}，"
                 f"跳过非电视剧：{stats['skipped_non_tv']}，"
                 f"跳过识别失败：{stats['skipped_no_mediainfo']}，"
                 f"跳过详情失败：{stats['skipped_no_seriesinfo']}"
@@ -381,12 +393,13 @@ class EmbyWatchAccelerator(_PluginBase):
                 f"任务结束，模式：{mode}，耗时：{cost:.2f}秒，"
                 f"加速尝试/下载：{stats['accelerate_attempts']}/{stats['accelerate_downloads']}，"
                 f"补全尝试/下载：{stats['backfill_attempts']}/{stats['backfill_downloads']}，"
-                f"仅统计跳过补全：{stats['backfill_skipped_stats_only']}"
+                f"仅统计跳过补全：{stats['backfill_skipped_stats_only']}，"
+                f"媒体库黑名单跳过：{stats['skipped_library_blacklist']}"
             )
             _lock.release()
 
-    def _process_emby_service(self, emby, mode: str, stats: Dict[str, int]):
-        resume_items = self._get_resume_items(emby)
+    def _process_emby_service(self, emby, mode: str, stats: Dict[str, int], server_name: str = ""):
+        resume_items = self._get_resume_items(emby, stats, server_name)
         if not resume_items:
             logger.info("未获取到继续观看的剧集记录")
             return
@@ -463,11 +476,14 @@ class EmbyWatchAccelerator(_PluginBase):
                 if self._accelerate_series(search_chain, download_chain, mediainfo, meta, current_season):
                     stats["accelerate_downloads"] += 1
 
-    def _get_resume_items(self, emby) -> List[dict]:
+    def _get_resume_items(self, emby, stats: Optional[Dict[str, int]] = None, server_name: str = "") -> List[dict]:
         users = self._get_emby_users(emby)
         if not users:
             logger.info("用户列表为空，无法获取继续观看")
             return []
+        blacklist_names, blacklist_paths = self._build_library_blacklist_for_server(emby, server_name)
+        if blacklist_names:
+            logger.info(f"媒体库黑名单：{', '.join(sorted(blacklist_names))}")
         all_items: List[dict] = []
         limit = max(self._resume_limit, 1)
         per_user_limit = max(1, int((limit + len(users) - 1) / len(users)))
@@ -487,6 +503,16 @@ class EmbyWatchAccelerator(_PluginBase):
                 continue
             items = res.json().get("Items") or []
             episode_items = [item for item in items if item.get("Type") == "Episode"]
+            if blacklist_paths:
+                filtered_items = []
+                for episode_item in episode_items:
+                    if self._is_blacklisted_library_item(episode_item, blacklist_paths):
+                        logger.info(f"媒体库黑名单过滤：{self._resume_item_desc(episode_item)}")
+                        if stats is not None:
+                            stats["skipped_library_blacklist"] = stats.get("skipped_library_blacklist", 0) + 1
+                        continue
+                    filtered_items.append(episode_item)
+                episode_items = filtered_items
             logger.info(f"用户 {user.get('Name') or user_id} 继续观看剧集数：{len(episode_items)}")
             for episode_item in episode_items[:per_user_limit]:
                 logger.info(f"继续观看候选：{self._resume_item_desc(episode_item)}")
@@ -509,6 +535,53 @@ class EmbyWatchAccelerator(_PluginBase):
             users = [u for u in users if u.get("Name") not in blacklist]
         logger.info(f"Emby用户过滤后数量：{len(users)}")
         return users
+
+    def _build_library_blacklist_for_server(self, emby, server_name: str) -> Tuple[set, List[str]]:
+        raw = self._library_blacklist or ""
+        rules: List[str] = []
+        for line in raw.splitlines():
+            stripped = line.strip()
+            if not stripped:
+                continue
+            if ":" not in stripped:
+                logger.warning(f"媒体库黑名单规则格式无效（需为 服务器名称:媒体库名称或ID）：{stripped}")
+                continue
+            rule_server, rule_library = stripped.split(":", 1)
+            if rule_server.strip().lower() != (server_name or "").strip().lower():
+                continue
+            token = rule_library.strip().lower()
+            if token:
+                rules.append(token)
+        if not rules:
+            return set(), []
+        token_set = set(rules)
+        library_paths: List[str] = []
+        matched_names: set = set()
+        try:
+            libraries = emby.get_emby_virtual_folders() or []
+        except Exception:
+            libraries = []
+        for lib in libraries:
+            lib_id = str(lib.get("Id") or "").strip().lower()
+            lib_name = str(lib.get("Name") or "").strip().lower()
+            if lib_id in token_set or lib_name in token_set:
+                if lib.get("Name"):
+                    matched_names.add(str(lib.get("Name")))
+                for path in (lib.get("Path") or []):
+                    normalized = str(path).replace("\\", "/").lower().rstrip("/")
+                    if normalized:
+                        library_paths.append(normalized)
+        return matched_names, library_paths
+
+    @staticmethod
+    def _is_blacklisted_library_item(item: Dict[str, Any], blacklisted_paths: List[str]) -> bool:
+        item_path = str(item.get("Path") or "").replace("\\", "/").lower().rstrip("/")
+        if not item_path:
+            return False
+        for base in blacklisted_paths:
+            if item_path.startswith(base):
+                return True
+        return False
 
     def _merge_resume_series(self, items: List[dict]) -> List[dict]:
         series_map: Dict[str, dict] = {}
