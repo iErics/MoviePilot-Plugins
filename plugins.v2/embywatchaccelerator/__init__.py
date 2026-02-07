@@ -25,7 +25,7 @@ class EmbyWatchAccelerator(_PluginBase):
     # 插件图标
     plugin_icon = "download.png"
     # 插件版本
-    plugin_version = "1.0.7"
+    plugin_version = "1.0.8"
     # 插件作者
     plugin_author = "codex"
     # 作者主页
@@ -444,11 +444,17 @@ class EmbyWatchAccelerator(_PluginBase):
             meta.begin_season = current_season
 
             _, no_exists = download_chain.get_no_exists_info(meta=meta, mediainfo=mediainfo)
-            emby_status = self._get_emby_series_status(emby, series_id)
-            is_ended = self._is_ended(mediainfo, emby_status)
+            is_ended, status_reason = self._resolve_season_state(
+                mediainfo=mediainfo,
+                current_season=current_season,
+                no_exists=no_exists
+            )
             status_text = "已完结" if is_ended else "更新中"
             logger.info(
-                f"{mediainfo.title_year} 状态判定：Emby={emby_status or '-'}，TMDB={mediainfo.status or '-'}，结果={status_text}"
+                f"{mediainfo.title_year} 状态判定：TMDB={mediainfo.status or '-'}，"
+                f"next_season={self._next_episode_season(mediainfo) or '-'}，"
+                f"当前季=S{current_season}，缺失={'是' if no_exists else '否'}，"
+                f"结果={status_text}，依据={status_reason}"
             )
 
             if is_ended:
@@ -485,9 +491,13 @@ class EmbyWatchAccelerator(_PluginBase):
             logger.info("用户列表为空，无法获取继续观看")
             return []
         blacklist_names, blacklist_paths, blacklist_library_ids = self._build_library_blacklist_for_server(emby, server_name)
-        if blacklist_names:
-            logger.info(f"媒体库黑名单：{', '.join(sorted(blacklist_names))}")
+        if blacklist_names or blacklist_paths or blacklist_library_ids:
+            logger.info(
+                f"媒体库黑名单已生效：名称={','.join(sorted(blacklist_names)) or '-'}，"
+                f"路径数={len(blacklist_paths)}，库ID数={len(blacklist_library_ids)}"
+            )
         all_items: List[dict] = []
+        resume_schema_logged = False
         limit = max(self._resume_limit, 1)
         per_user_limit = max(1, int((limit + len(users) - 1) / len(users)))
         logger.info(f"继续观看读取总数上限：{limit}，用户数：{len(users)}，单用户上限：{per_user_limit}")
@@ -506,7 +516,10 @@ class EmbyWatchAccelerator(_PluginBase):
                 continue
             items = res.json().get("Items") or []
             episode_items = [item for item in items if item.get("Type") == "Episode"]
-            if blacklist_paths:
+            if not resume_schema_logged and episode_items:
+                self._log_resume_schema_probe(user_name=user.get("Name") or user_id, episode_items=episode_items)
+                resume_schema_logged = True
+            if blacklist_paths or blacklist_library_ids or blacklist_names:
                 filtered_items = []
                 for episode_item in episode_items:
                     if self._is_blacklisted_library_item(
@@ -527,6 +540,27 @@ class EmbyWatchAccelerator(_PluginBase):
             if len(all_items) >= limit:
                 break
         return all_items[:limit]
+
+    @staticmethod
+    def _log_resume_schema_probe(user_name: str, episode_items: List[dict]) -> None:
+        sample_size = min(3, len(episode_items))
+        sample_payload = []
+        for item in episode_items[:sample_size]:
+            sample_payload.append({
+                "Id": item.get("Id"),
+                "SeriesId": item.get("SeriesId"),
+                "SeriesName": item.get("SeriesName"),
+                "ParentId": item.get("ParentId"),
+                "ParentIndexNumber": item.get("ParentIndexNumber"),
+                "IndexNumber": item.get("IndexNumber"),
+                "Path": item.get("Path"),
+                "AncestorIds": item.get("AncestorIds"),
+                "keys": sorted(list(item.keys()))
+            })
+        logger.info(
+            f"Resume字段探针：user={user_name}，样本数={sample_size}，"
+            f"样本摘要={sample_payload}"
+        )
 
     def _get_emby_users(self, emby) -> List[dict]:
         res = emby.get_data("[HOST]Users?api_key=[APIKEY]")
@@ -570,6 +604,7 @@ class EmbyWatchAccelerator(_PluginBase):
         library_paths: List[str] = []
         library_ids: set = set()
         matched_names: set = set()
+        configured_name_tokens: set = set(token_set)
         try:
             libraries = emby.get_emby_virtual_folders() or []
         except Exception:
@@ -580,7 +615,9 @@ class EmbyWatchAccelerator(_PluginBase):
             lib_name = str(lib.get("Name") or "").strip().lower()
             if any(lib_id in token_set for lib_id in lib_ids) or lib_name in token_set:
                 if lib.get("Name"):
-                    matched_names.add(str(lib.get("Name")))
+                    matched_name = str(lib.get("Name"))
+                    matched_names.add(matched_name)
+                    configured_name_tokens.add(matched_name.strip().lower())
                 for lib_id in lib_ids:
                     library_ids.add(lib_id)
                 raw_paths = lib.get("Path") or []
@@ -590,7 +627,12 @@ class EmbyWatchAccelerator(_PluginBase):
                     normalized = str(path).replace("\\", "/").lower().rstrip("/")
                     if normalized:
                         library_paths.append(normalized)
-        return matched_names, library_paths, library_ids
+        if not matched_names and not library_paths and not library_ids:
+            logger.warning(
+                f"媒体库黑名单未匹配到Emby虚拟库：server={server_name or '-'}，"
+                f"规则={','.join(sorted(token_set))}"
+            )
+        return configured_name_tokens, library_paths, library_ids
 
     @staticmethod
     def _is_blacklisted_library_item(
@@ -721,17 +763,51 @@ class EmbyWatchAccelerator(_PluginBase):
         return mediainfo
 
     @staticmethod
-    def _is_ended(mediainfo: MediaInfo, emby_status: Optional[str] = None) -> bool:
+    def _is_ended(mediainfo: MediaInfo) -> bool:
         ended_status = {"ended", "canceled", "cancelled", "完结", "已完结"}
-        active_status = {"continuing", "returning series", "upcoming", "更新中", "连载中"}
-        if emby_status:
-            normalized = emby_status.strip().lower()
-            if normalized in ended_status:
-                return True
-            if normalized in active_status:
-                return False
         status = (mediainfo.status or "").strip().lower()
         return status in ended_status
+
+    def _resolve_season_state(
+            self,
+            mediainfo: MediaInfo,
+            current_season: int,
+            no_exists: Dict[int, Dict[int, NotExistMediaInfo]]) -> Tuple[bool, str]:
+        # 规则：优先按 TMDB 全剧完结状态；否则按“当前季是否仍在更新”判定，避免多季剧误判。
+        if self._is_ended(mediainfo):
+            return True, "tmdb_status_ended"
+
+        status = (mediainfo.status or "").strip().lower()
+        next_season = self._next_episode_season(mediainfo)
+        has_missing = bool(no_exists)
+
+        if next_season:
+            if next_season == current_season:
+                return False, "next_episode_in_current_season"
+            if next_season > current_season:
+                if has_missing:
+                    return False, "next_episode_in_future_season_but_current_missing"
+                return True, "next_episode_in_future_season_current_complete"
+
+        if has_missing:
+            return False, "current_season_has_missing"
+
+        if status in {"continuing", "returning series", "upcoming", "更新中", "连载中"}:
+            # 全剧可能仍是 Returning Series，但当前季无缺失且无下一集信息时，按当前季已完结处理。
+            return True, "tmdb_active_but_current_complete"
+
+        return True, "fallback_current_complete"
+
+    @staticmethod
+    def _next_episode_season(mediainfo: MediaInfo) -> Optional[int]:
+        next_ep = mediainfo.next_episode_to_air or {}
+        if not isinstance(next_ep, dict):
+            return None
+        season_number = next_ep.get("season_number")
+        try:
+            return int(season_number) if season_number is not None else None
+        except Exception:
+            return None
 
     def _accelerate_series(self, search_chain: SearchChain, download_chain: DownloadChain,
                            mediainfo: MediaInfo, meta: MetaInfo, season: int) -> bool:
@@ -787,20 +863,6 @@ class EmbyWatchAccelerator(_PluginBase):
                     continue
                 contexts.append(context)
         return TorrentHelper().sort_torrents(contexts)
-
-    @staticmethod
-    def _get_emby_series_status(emby, series_id: str) -> Optional[str]:
-        if not series_id:
-            return None
-        url = f"[HOST]emby/Users/[USER]/Items/{series_id}?Fields=Status,EndDate&api_key=[APIKEY]"
-        res = emby.get_data(url)
-        if not res or res.status_code != 200:
-            return None
-        data = res.json() or {}
-        end_date = data.get("EndDate")
-        if end_date:
-            return "ended"
-        return data.get("Status")
 
     def _backfill_series(self, search_chain: SearchChain, download_chain: DownloadChain,
                          mediainfo: MediaInfo, meta: MetaInfo,
