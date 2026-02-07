@@ -25,7 +25,7 @@ class EmbyWatchAccelerator(_PluginBase):
     # 插件图标
     plugin_icon = "download.png"
     # 插件版本
-    plugin_version = "1.0.6"
+    plugin_version = "1.0.7"
     # 插件作者
     plugin_author = "codex"
     # 作者主页
@@ -204,7 +204,7 @@ class EmbyWatchAccelerator(_PluginBase):
                                     {
                                         "component": "VCol",
                                         "props": {"cols": 12, "md": 12},
-                                        "content": [{"component": "VTextarea", "props": {"model": "library_blacklist", "label": "媒体库黑名单（每行：服务器名称:媒体库名称或ID）", "rows": 3, "autoGrow": True}}]
+                                        "content": [{"component": "VTextarea", "props": {"model": "library_blacklist", "label": "媒体库黑名单（兼容逗号分隔；每行可写 服务器名称:媒体库名称或ID）", "rows": 3, "autoGrow": True}}]
                                     }
                                 ]
                             }
@@ -539,12 +539,16 @@ class EmbyWatchAccelerator(_PluginBase):
     def _build_library_blacklist_for_server(self, emby, server_name: str) -> Tuple[set, List[str]]:
         raw = self._library_blacklist or ""
         rules: List[str] = []
+        global_rules: List[str] = []
         for line in raw.splitlines():
             stripped = line.strip()
             if not stripped:
                 continue
             if ":" not in stripped:
-                logger.warning(f"媒体库黑名单规则格式无效（需为 服务器名称:媒体库名称或ID）：{stripped}")
+                for token in stripped.replace("，", ",").split(","):
+                    parsed = token.strip().lower()
+                    if parsed:
+                        global_rules.append(parsed)
                 continue
             rule_server, rule_library = stripped.split(":", 1)
             if rule_server.strip().lower() != (server_name or "").strip().lower():
@@ -552,9 +556,10 @@ class EmbyWatchAccelerator(_PluginBase):
             token = rule_library.strip().lower()
             if token:
                 rules.append(token)
-        if not rules:
+        all_rules = global_rules + rules
+        if not all_rules:
             return set(), []
-        token_set = set(rules)
+        token_set = set(all_rules)
         library_paths: List[str] = []
         matched_names: set = set()
         try:
