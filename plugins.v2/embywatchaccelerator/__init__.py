@@ -26,7 +26,7 @@ class EmbyWatchAccelerator(_PluginBase):
     # 插件图标
     plugin_icon = "download.png"
     # 插件版本
-    plugin_version = "1.0.19"
+    plugin_version = "1.0.20"
     # 插件作者
     plugin_author = "codex"
     # 作者主页
@@ -278,7 +278,7 @@ class EmbyWatchAccelerator(_PluginBase):
             user_cards.append(
                 {
                     "component": "VCard",
-                    "props": {"variant": "outlined", "class": "pa-3 mb-3"},
+                    "props": {"variant": "outlined", "class": "pa-3 mb-3", "style": "border-color:#e6ebf2;"},
                     "content": [
                         {
                             "component": "div",
@@ -324,7 +324,8 @@ class EmbyWatchAccelerator(_PluginBase):
                 "component": "VCard",
                 "props": {
                     "variant": "outlined",
-                    "class": "pa-3"
+                    "class": "pa-3",
+                    "style": "border-color:#e9edf4;"
                 },
                 "content": user_group_content
             }
@@ -542,7 +543,17 @@ class EmbyWatchAccelerator(_PluginBase):
                 ]
             })
 
-        content = [{"component": "VCardSubtitle", "props": {"class": "pa-0 mb-2 font-bold"}, "text": title}]
+        content = [
+            {
+                "component": "div",
+                "props": {"class": "d-flex align-center mb-4 mt-1"},
+                "content": [
+                    {"component": "VDivider", "props": {"class": "flex-grow-1"}},
+                    {"component": "VCardSubtitle", "props": {"class": "px-3 py-0 font-weight-bold text-medium-emphasis"}, "text": title},
+                    {"component": "VDivider", "props": {"class": "flex-grow-1"}}
+                ]
+            }
+        ]
         if cards:
             content.append({"component": "VRow", "content": cards})
         else:
