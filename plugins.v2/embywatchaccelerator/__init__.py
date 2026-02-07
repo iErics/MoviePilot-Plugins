@@ -26,7 +26,7 @@ class EmbyWatchAccelerator(_PluginBase):
     # 插件图标
     plugin_icon = "download.png"
     # 插件版本
-    plugin_version = "1.0.22"
+    plugin_version = "1.0.23"
     # 插件作者
     plugin_author = "codex"
     # 作者主页
@@ -303,7 +303,6 @@ class EmbyWatchAccelerator(_PluginBase):
                                 }
                             ]
                         },
-                        {"component": "VDivider"},
                         {
                             "component": "VRow",
                             "content": mode_blocks
