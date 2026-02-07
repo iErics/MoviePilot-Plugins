@@ -26,7 +26,7 @@ class EmbyWatchAccelerator(_PluginBase):
     # 插件图标
     plugin_icon = "download.png"
     # 插件版本
-    plugin_version = "1.0.20"
+    plugin_version = "1.0.21"
     # 插件作者
     plugin_author = "codex"
     # 作者主页
@@ -546,11 +546,23 @@ class EmbyWatchAccelerator(_PluginBase):
         content = [
             {
                 "component": "div",
-                "props": {"class": "d-flex align-center mb-4 mt-1"},
+                "props": {"class": "position-relative mb-4 mt-1", "style": "height:24px;"},
                 "content": [
-                    {"component": "VDivider", "props": {"class": "flex-grow-1"}},
-                    {"component": "VCardSubtitle", "props": {"class": "px-3 py-0 font-weight-bold text-medium-emphasis"}, "text": title},
-                    {"component": "VDivider", "props": {"class": "flex-grow-1"}}
+                    {
+                        "component": "VDivider",
+                        "props": {
+                            "class": "position-absolute",
+                            "style": "left:0;right:0;top:50%;transform:translateY(-50%);"
+                        }
+                    },
+                    {
+                        "component": "div",
+                        "props": {
+                            "class": "position-absolute px-3 font-weight-bold text-medium-emphasis",
+                            "style": "left:50%;top:50%;transform:translate(-50%,-50%);background:rgba(255,255,255,0.96);"
+                        },
+                        "text": title
+                    }
                 ]
             }
         ]
