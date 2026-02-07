@@ -4,9 +4,11 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from app.chain.download import DownloadChain
 from app.chain.search import SearchChain
+from app.chain.torrents import TorrentsChain
 from app.core.context import MediaInfo
 from app.core.metainfo import MetaInfo
 from app.helper.mediaserver import MediaServerHelper
+from app.helper.torrent import TorrentHelper
 from app.log import logger
 from app.plugins import _PluginBase
 from app.schemas import NotExistMediaInfo
@@ -23,7 +25,7 @@ class EmbyWatchAccelerator(_PluginBase):
     # 插件图标
     plugin_icon = "download.png"
     # 插件版本
-    plugin_version = "1.0.3"
+    plugin_version = "1.0.4"
     # 插件作者
     plugin_author = "codex"
     # 作者主页
@@ -429,7 +431,8 @@ class EmbyWatchAccelerator(_PluginBase):
             meta.begin_season = current_season
 
             _, no_exists = download_chain.get_no_exists_info(meta=meta, mediainfo=mediainfo)
-            is_ended = self._is_ended(mediainfo)
+            emby_status = self._get_emby_series_status(emby, series_id)
+            is_ended = self._is_ended(mediainfo, emby_status)
             status_text = "已完结" if is_ended else "更新中"
 
             if is_ended:
@@ -455,7 +458,7 @@ class EmbyWatchAccelerator(_PluginBase):
                 continue
 
             if mode == "accelerate":
-                logger.info(f"{mediainfo.title_year} 状态：{status_text}，执行加速更新")
+                logger.info(f"{mediainfo.title_year} 状态：{status_text}，执行加速更新（缓存匹配）")
                 stats["accelerate_attempts"] += 1
                 if self._accelerate_series(search_chain, download_chain, mediainfo, meta, current_season):
                     stats["accelerate_downloads"] += 1
@@ -609,23 +612,27 @@ class EmbyWatchAccelerator(_PluginBase):
         return mediainfo
 
     @staticmethod
-    def _is_ended(mediainfo: MediaInfo) -> bool:
-        status = (mediainfo.status or "").lower()
-        return status in ["ended", "canceled", "cancelled"]
+    def _is_ended(mediainfo: MediaInfo, emby_status: Optional[str] = None) -> bool:
+        ended_status = {"ended", "canceled", "cancelled", "完结", "已完结"}
+        active_status = {"continuing", "returning series", "upcoming", "更新中", "连载中"}
+        if emby_status:
+            normalized = emby_status.strip().lower()
+            if normalized in ended_status:
+                return True
+            if normalized in active_status:
+                return False
+        status = (mediainfo.status or "").strip().lower()
+        return status in ended_status
 
     def _accelerate_series(self, search_chain: SearchChain, download_chain: DownloadChain,
                            mediainfo: MediaInfo, meta: MetaInfo, season: int) -> bool:
         mediakey = mediainfo.tmdb_id or mediainfo.douban_id
         if not mediakey:
             return False
-        no_exists = {
-            mediakey: {
-                season: NotExistMediaInfo(season=season, episodes=[])
-            }
-        }
-        contexts = search_chain.process(mediainfo=mediainfo, no_exists=no_exists)
-        logger.info(f"{mediainfo.title_year} 加速搜索命中资源数：{len(contexts)}")
+        contexts = self._accelerate_contexts_from_cache(mediainfo=mediainfo, season=season)
+        logger.info(f"{mediainfo.title_year} 加速缓存命中资源数：{len(contexts)}")
         if not contexts:
+            logger.info(f"{mediainfo.title_year} 加速缓存未命中，跳过本次加速（不触发全站搜索）")
             return False
 
         exist_info = self.chain.media_exists(mediainfo=mediainfo)
@@ -647,6 +654,41 @@ class EmbyWatchAccelerator(_PluginBase):
             )
             return True
         return False
+
+    def _accelerate_contexts_from_cache(self, mediainfo: MediaInfo, season: int) -> List:
+        torrents_cache = TorrentsChain().get_torrents() or {}
+        contexts = []
+        for domain_contexts in torrents_cache.values():
+            for context in domain_contexts:
+                cache_media = context.media_info
+                cache_meta = context.meta_info
+                if not cache_media or not cache_meta:
+                    continue
+                if cache_media.type != MediaType.TV:
+                    continue
+                same_media = False
+                if mediainfo.tmdb_id and cache_media.tmdb_id and mediainfo.tmdb_id == cache_media.tmdb_id:
+                    same_media = True
+                elif mediainfo.douban_id and cache_media.douban_id and mediainfo.douban_id == cache_media.douban_id:
+                    same_media = True
+                if not same_media:
+                    continue
+                season_list = cache_meta.season_list or [1]
+                if season not in season_list:
+                    continue
+                contexts.append(context)
+        return TorrentHelper().sort_torrents(contexts)
+
+    @staticmethod
+    def _get_emby_series_status(emby, series_id: str) -> Optional[str]:
+        if not series_id:
+            return None
+        url = f"[HOST]emby/Users/[USER]/Items/{series_id}?Fields=Status&api_key=[APIKEY]"
+        res = emby.get_data(url)
+        if not res or res.status_code != 200:
+            return None
+        data = res.json() or {}
+        return data.get("Status")
 
     def _backfill_series(self, search_chain: SearchChain, download_chain: DownloadChain,
                          mediainfo: MediaInfo, meta: MetaInfo,
