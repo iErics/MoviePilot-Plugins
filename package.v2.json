@@ -3,11 +3,12 @@
     "name": "Emby继续观看加速",
     "description": "基于Emby继续观看的剧集记录，自动搜索并加速更新或补全缺失剧集。",
     "labels": "Emby,追剧,补全",
-    "version": "1.0.10",
+    "version": "1.0.11",
     "icon": "download.png",
     "author": "codex",
     "level": 2,
     "history": {
+      "v1.0.11": "恢复继续观看候选日志，PlaybackPositionTicks=0改为保留并提示，避免误过滤最新待看剧集",
       "v1.0.10": "更新中剧集仅补全已播缺失，精简继续观看日志并保留PlaybackPositionTicks=0排除原因",
       "v1.0.9": "修复媒体库黑名单混合格式解析并增强虚拟库诊断，过滤无效继续观看条目",
       "v1.0.8": "新增Resume字段探针日志，便于定位媒体库黑名单匹配问题",

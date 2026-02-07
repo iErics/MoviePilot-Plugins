@@ -26,7 +26,7 @@ class EmbyWatchAccelerator(_PluginBase):
     # 插件图标
     plugin_icon = "download.png"
     # 插件版本
-    plugin_version = "1.0.10"
+    plugin_version = "1.0.11"
     # 插件作者
     plugin_author = "codex"
     # 作者主页
@@ -529,10 +529,10 @@ class EmbyWatchAccelerator(_PluginBase):
             for episode_item in episode_items:
                 valid, reason = self._is_valid_resume_item(episode_item)
                 if valid:
+                    if reason == "playback_ticks_zero":
+                        logger.info(f"继续保留条目：PlaybackPositionTicks=0，可能为未开始播放的最新集，{self._resume_item_desc(episode_item)}")
                     filtered_by_resume.append(episode_item)
                     continue
-                if reason == "playback_ticks_zero":
-                    logger.info(f"排除继续观看条目：PlaybackPositionTicks=0，{self._resume_item_desc(episode_item)}")
             episode_items = filtered_by_resume
             if not resume_schema_logged and episode_items:
                 self._log_resume_schema_probe(user_name=user.get("Name") or user_id, episode_items=episode_items)
@@ -552,6 +552,8 @@ class EmbyWatchAccelerator(_PluginBase):
                     filtered_items.append(episode_item)
                 episode_items = filtered_items
             logger.info(f"用户 {user.get('Name') or user_id} 继续观看剧集数：{len(episode_items)}")
+            for episode_item in episode_items[:per_user_limit]:
+                logger.info(f"继续观看候选：{self._resume_item_desc(episode_item)}")
             all_items.extend(episode_items[:per_user_limit])
             if len(all_items) >= limit:
                 break
@@ -591,7 +593,8 @@ class EmbyWatchAccelerator(_PluginBase):
         try:
             if int(ticks) > 0:
                 return True, "ok"
-            return False, "playback_ticks_zero"
+            # 继续观看里的 0 进度常见于“最新集刚打开/待开始”，不直接排除
+            return True, "playback_ticks_zero"
         except Exception:
             return True, "ok"
 
