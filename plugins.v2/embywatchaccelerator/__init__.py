@@ -26,7 +26,7 @@ class EmbyWatchAccelerator(_PluginBase):
     # 插件图标
     plugin_icon = "download.png"
     # 插件版本
-    plugin_version = "1.0.17"
+    plugin_version = "1.0.18"
     # 插件作者
     plugin_author = "codex"
     # 作者主页
@@ -247,28 +247,50 @@ class EmbyWatchAccelerator(_PluginBase):
                     "component": "VCard",
                     "props": {"variant": "outlined", "class": "pa-3 mb-3"},
                     "content": [
-                        {"component": "VCardTitle", "text": f"用户：{user_name}"},
+                        {
+                            "component": "div",
+                            "props": {"class": "d-flex justify-space-between align-center"},
+                            "content": [
+                                {"component": "VCardTitle", "props": {"class": "pa-0"}, "text": user_name},
+                                {
+                                    "component": "div",
+                                    "props": {"class": "d-flex align-center mr-n2"},
+                                    "content": [
+                                        {
+                                            "component": "VChip",
+                                            "props": {"class": "mr-1", "color": "primary", "variant": "tonal", "size": "small"},
+                                            "text": f"追更 {user_info.get('track_attempts', 0)}/{user_info.get('track_downloads', 0)}"
+                                        },
+                                        {
+                                            "component": "VChip",
+                                            "props": {"color": "success", "variant": "tonal", "size": "small"},
+                                            "text": f"补全 {user_info.get('backfill_attempts', 0)}/{user_info.get('backfill_downloads', 0)}"
+                                        }
+                                    ]
+                                }
+                            ]
+                        },
                         {"component": "VDivider"},
                         {
                             "component": "VRow",
                             "content": [
                                 {
                                     "component": "VCol",
-                                    "props": {"cols": 12, "md": 12, "class": "pb-0"},
+                                    "props": {"cols": 12, "class": "pb-0"},
                                     "content": self._build_user_mode_block(
                                         title="追更",
-                                        attempts=user_info.get("track_attempts", 0),
-                                        downloads=user_info.get("track_downloads", 0),
+                                        attempts=0,
+                                        downloads=0,
                                         items=user_info.get("track_items") or []
                                     )
                                 },
                                 {
                                     "component": "VCol",
-                                    "props": {"cols": 12, "md": 12, "class": "pt-0"},
+                                    "props": {"cols": 12, "class": "pt-2"},
                                     "content": self._build_user_mode_block(
                                         title="补全",
-                                        attempts=user_info.get("backfill_attempts", 0),
-                                        downloads=user_info.get("backfill_downloads", 0),
+                                        attempts=0,
+                                        downloads=0,
                                         items=user_info.get("backfill_items") or []
                                     )
                                 }
@@ -451,11 +473,11 @@ class EmbyWatchAccelerator(_PluginBase):
         for item in (items[-12:] if items else []):
             cards.append({
                 "component": "VCol",
-                "props": {"cols": 12, "md": 6, "xl": 4},
+                "props": {"cols": 12, "sm": 6, "md": 4, "lg": 3},
                 "content": [
                     {
                         "component": "VCard",
-                        "props": {"variant": "tonal", "class": "pa-2 h-100"},
+                        "props": {"variant": "tonal", "class": "pa-2 h-100", "style": "max-width:320px;"},
                         "content": [
                             {
                                 "component": "div",
@@ -508,17 +530,11 @@ class EmbyWatchAccelerator(_PluginBase):
                 ]
             })
 
-        content = [
-            {
-                "component": "VCardSubtitle",
-                "props": {"class": "pa-0 mb-2 font-bold"},
-                "text": f"{title}  尝试/下载：{attempts}/{downloads}"
-            }
-        ]
+        content = [{"component": "VCardSubtitle", "props": {"class": "pa-0 mb-2 font-bold"}, "text": title}]
         if cards:
             content.append({"component": "VRow", "content": cards})
         else:
-            content.append({"component": "VCardText", "props": {"class": "pa-0"}, "text": "暂无记录"})
+            content.append({"component": "VCardText", "props": {"class": "pa-0 mt-1"}, "text": "暂无记录"})
         return content
 
     def _process(self, mode: str):
