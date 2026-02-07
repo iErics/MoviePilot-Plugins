@@ -22,11 +22,11 @@ class EmbyWatchAccelerator(_PluginBase):
     # 插件名称
     plugin_name = "Emby继续观看加速"
     # 插件描述
-    plugin_desc = "基于Emby继续观看的剧集记录，自动搜索并加速更新或补全缺失剧集。"
+    plugin_desc = "基于Emby继续观看的剧集记录，自动搜索并追更更新或补全缺失剧集。"
     # 插件图标
     plugin_icon = "download.png"
     # 插件版本
-    plugin_version = "1.0.12"
+    plugin_version = "1.0.13"
     # 插件作者
     plugin_author = "codex"
     # 作者主页
@@ -69,7 +69,7 @@ class EmbyWatchAccelerator(_PluginBase):
 
         if self._run_once:
             if self._enabled:
-                self._append_log("检测到立即运行开关，开始执行一次加速任务")
+                self._append_log("检测到立即运行开关，开始执行一次追更任务")
                 self._process(mode="accelerate")
             else:
                 self._append_log("立即运行开关已开启，但插件未启用，跳过执行", "WARNING")
@@ -103,14 +103,14 @@ class EmbyWatchAccelerator(_PluginBase):
         return [
             {
                 "id": "EmbyWatchAccelerate",
-                "name": "Emby继续观看加速（更新）",
+                "name": "Emby继续观看追更（更新）",
                 "trigger": "interval",
                 "func": self._run_accelerate,
                 "kwargs": {"minutes": max(self._accelerate_interval_minutes, 1)}
             },
             {
                 "id": "EmbyWatchBackfill",
-                "name": "Emby继续观看加速（补全）",
+                "name": "Emby继续观看追更（补全）",
                 "trigger": "interval",
                 "func": self._run_backfill,
                 "kwargs": {"hours": max(self._backfill_interval_hours, 1)}
@@ -162,7 +162,7 @@ class EmbyWatchAccelerator(_PluginBase):
                                     {
                                         "component": "VCol",
                                         "props": {"cols": 12, "md": 3},
-                                        "content": [{"component": "VTextField", "props": {"model": "accelerate_interval_minutes", "label": "加速更新间隔（分钟）", "type": "number", "min": 1}}]
+                                        "content": [{"component": "VTextField", "props": {"model": "accelerate_interval_minutes", "label": "追更更新间隔（分钟）", "type": "number", "min": 1}}]
                                     },
                                     {
                                         "component": "VCol",
@@ -237,15 +237,15 @@ class EmbyWatchAccelerator(_PluginBase):
     def get_page(self) -> Optional[List[dict]]:
         stats = self.get_data("last_stats") or {}
         logs = self.get_data("logs") or []
-        items = [
+        summary_items = [
             {"label": "上次运行时间", "value": stats.get("finished_at") or "-"},
-            {"label": "上次运行模式", "value": stats.get("mode") or "-"},
+            {"label": "上次运行模式", "value": "追更" if stats.get("mode") == "accelerate" else "补全"},
             {"label": "耗时(秒)", "value": stats.get("duration_seconds") or "-"},
             {"label": "服务器数", "value": stats.get("servers") or 0},
             {"label": "继续观看条目", "value": stats.get("resume_items") or 0},
             {"label": "去重剧集数", "value": stats.get("series_items") or 0},
             {"label": "处理剧集数", "value": stats.get("processed_series") or 0},
-            {"label": "加速尝试/下载", "value": f"{stats.get('accelerate_attempts') or 0}/{stats.get('accelerate_downloads') or 0}"},
+            {"label": "追更尝试/下载", "value": f"{stats.get('accelerate_attempts') or 0}/{stats.get('accelerate_downloads') or 0}"},
             {"label": "补全尝试/下载", "value": f"{stats.get('backfill_attempts') or 0}/{stats.get('backfill_downloads') or 0}"},
             {"label": "仅统计跳过补全", "value": stats.get("backfill_skipped_stats_only") or 0},
             {"label": "媒体库黑名单跳过", "value": stats.get("skipped_library_blacklist") or 0},
@@ -253,6 +253,81 @@ class EmbyWatchAccelerator(_PluginBase):
             {"label": "跳过识别失败", "value": stats.get("skipped_no_mediainfo") or 0},
             {"label": "跳过详情失败", "value": stats.get("skipped_no_seriesinfo") or 0}
         ]
+        user_stats = stats.get("user_stats") or {}
+        user_cards = []
+        for user_name in sorted(user_stats.keys()):
+            user_info = user_stats.get(user_name) or {}
+            track_items = user_info.get("track_items") or []
+            backfill_items = user_info.get("backfill_items") or []
+            user_cards.append(
+                {
+                    "component": "VCard",
+                    "props": {"variant": "outlined", "class": "pa-3 mb-3"},
+                    "content": [
+                        {"component": "VCardTitle", "text": f"用户：{user_name}"},
+                        {"component": "VDivider"},
+                        {
+                            "component": "VRow",
+                            "content": [
+                                {
+                                    "component": "VCol",
+                                    "props": {"cols": 12, "md": 6},
+                                    "content": [
+                                        {"component": "VCardSubtitle", "text": "追更"},
+                                        {"component": "VCardText",
+                                         "text": f"尝试/下载：{user_info.get('track_attempts', 0)}/{user_info.get('track_downloads', 0)}"},
+                                        {
+                                            "component": "VList",
+                                            "props": {"density": "compact"},
+                                            "content": [
+                                                {
+                                                    "component": "VListItem",
+                                                    "content": [
+                                                        {"component": "VListItemTitle",
+                                                         "text": f"{i.get('title', '-')}"
+                                                                 f" ({i.get('year') or '-'}) S{i.get('season') or '-'} · {i.get('result', '-')}"}
+                                                    ]
+                                                } for i in (track_items[-20:] if track_items else [{"title": "暂无"}])
+                                            ]
+                                        }
+                                    ]
+                                },
+                                {
+                                    "component": "VCol",
+                                    "props": {"cols": 12, "md": 6},
+                                    "content": [
+                                        {"component": "VCardSubtitle", "text": "补全"},
+                                        {"component": "VCardText",
+                                         "text": f"尝试/下载：{user_info.get('backfill_attempts', 0)}/{user_info.get('backfill_downloads', 0)}"},
+                                        {
+                                            "component": "VList",
+                                            "props": {"density": "compact"},
+                                            "content": [
+                                                {
+                                                    "component": "VListItem",
+                                                    "content": [
+                                                        {"component": "VListItemTitle",
+                                                         "text": f"{i.get('title', '-')}"
+                                                                 f" ({i.get('year') or '-'}) S{i.get('season') or '-'} · {i.get('result', '-')}"}
+                                                    ]
+                                                } for i in (backfill_items[-20:] if backfill_items else [{"title": "暂无"}])
+                                            ]
+                                        }
+                                    ]
+                                }
+                            ]
+                        }
+                    ]
+                }
+            )
+        user_group_content = [
+            {"component": "VCardTitle", "props": {"class": "text-subtitle-1"}, "text": "用户分组统计"},
+            {"component": "VDivider"}
+        ]
+        if user_cards:
+            user_group_content.extend(user_cards)
+        else:
+            user_group_content.append({"component": "VCardText", "text": "暂无用户数据"})
         return [
             {
                 "component": "VCard",
@@ -279,10 +354,18 @@ class EmbyWatchAccelerator(_PluginBase):
                                 "content": [
                                     {"component": "VListItemTitle", "text": f"{item['label']}：{item['value']}"}
                                 ]
-                            } for item in items
+                            } for item in summary_items
                         ]
                     }
                 ]
+            },
+            {
+                "component": "VCard",
+                "props": {
+                    "variant": "outlined",
+                    "class": "pa-3 mt-3"
+                },
+                "content": user_group_content
             },
             {
                 "component": "VCard",
@@ -334,12 +417,44 @@ class EmbyWatchAccelerator(_PluginBase):
             logs = logs[-self._max_log_records:]
         self.save_data("logs", logs)
 
+    @staticmethod
+    def _get_user_bucket(stats: Dict[str, Any], user_name: Optional[str]) -> Dict[str, Any]:
+        user_key = user_name or "未知用户"
+        user_stats = stats.setdefault("user_stats", {})
+        bucket = user_stats.get(user_key)
+        if bucket:
+            return bucket
+        bucket = {
+            "resume_items": 0,
+            "series_items": 0,
+            "processed_series": 0,
+            "track_attempts": 0,
+            "track_downloads": 0,
+            "backfill_attempts": 0,
+            "backfill_downloads": 0,
+            "track_items": [],
+            "backfill_items": []
+        }
+        user_stats[user_key] = bucket
+        return bucket
+
+    def _append_user_media_result(self, stats: Dict[str, Any], user_name: Optional[str], kind: str,
+                                  mediainfo: MediaInfo, season: Optional[int], result: str):
+        bucket = self._get_user_bucket(stats, user_name)
+        target_key = "track_items" if kind == "track" else "backfill_items"
+        bucket[target_key].append({
+            "title": mediainfo.title,
+            "year": mediainfo.year,
+            "season": season,
+            "result": result
+        })
+
     def _process(self, mode: str):
         if not self._enabled:
             return
         if not _lock.acquire(blocking=False):
-            logger.info("继续观看加速任务正在运行，跳过本次执行")
-            self._append_log("继续观看加速任务正在运行，跳过本次执行")
+            logger.info("继续观看任务正在运行，跳过本次执行")
+            self._append_log("继续观看任务正在运行，跳过本次执行")
             return
         start_time = datetime.datetime.now()
         stats = {
@@ -355,11 +470,12 @@ class EmbyWatchAccelerator(_PluginBase):
             "skipped_library_blacklist": 0,
             "skipped_non_tv": 0,
             "skipped_no_mediainfo": 0,
-            "skipped_no_seriesinfo": 0
+            "skipped_no_seriesinfo": 0,
+            "user_stats": {}
         }
         try:
-            logger.info(f"继续观看加速任务开始，模式：{mode}")
-            self._append_log(f"继续观看加速任务开始，模式：{mode}")
+            logger.info(f"继续观看任务开始，模式：{mode}")
+            self._append_log(f"继续观看任务开始，模式：{mode}")
             services = MediaServerHelper().get_services()
             if not services:
                 logger.info("未检测到媒体服务器配置，任务结束")
@@ -379,10 +495,10 @@ class EmbyWatchAccelerator(_PluginBase):
             stats["finished_at"] = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             self.save_data("last_stats", stats)
             logger.info(
-                f"继续观看加速任务结束，模式：{mode}，耗时：{cost:.2f}秒，"
+                f"继续观看任务结束，模式：{mode}，耗时：{cost:.2f}秒，"
                 f"服务器数：{stats['servers']}，继续观看条目：{stats['resume_items']}，"
                 f"去重剧集数：{stats['series_items']}，处理剧集数：{stats['processed_series']}，"
-                f"加速尝试/下载：{stats['accelerate_attempts']}/{stats['accelerate_downloads']}，"
+                f"追更尝试/下载：{stats['accelerate_attempts']}/{stats['accelerate_downloads']}，"
                 f"补全尝试/下载：{stats['backfill_attempts']}/{stats['backfill_downloads']}，"
                 f"仅统计跳过补全：{stats['backfill_skipped_stats_only']}，"
                 f"媒体库黑名单跳过：{stats['skipped_library_blacklist']}，"
@@ -392,7 +508,7 @@ class EmbyWatchAccelerator(_PluginBase):
             )
             self._append_log(
                 f"任务结束，模式：{mode}，耗时：{cost:.2f}秒，"
-                f"加速尝试/下载：{stats['accelerate_attempts']}/{stats['accelerate_downloads']}，"
+                f"追更尝试/下载：{stats['accelerate_attempts']}/{stats['accelerate_downloads']}，"
                 f"补全尝试/下载：{stats['backfill_attempts']}/{stats['backfill_downloads']}，"
                 f"仅统计跳过补全：{stats['backfill_skipped_stats_only']}，"
                 f"媒体库黑名单跳过：{stats['skipped_library_blacklist']}"
@@ -418,8 +534,11 @@ class EmbyWatchAccelerator(_PluginBase):
         for item in series_items:
             series_id = item.get("series_id")
             current_season = item.get("season")
+            current_user = item.get("user")
             if not series_id or not current_season:
                 continue
+            user_bucket = self._get_user_bucket(stats, current_user)
+            user_bucket["series_items"] += 1
 
             series_info = emby.get_iteminfo(series_id)
             if not series_info:
@@ -439,6 +558,7 @@ class EmbyWatchAccelerator(_PluginBase):
                 continue
 
             stats["processed_series"] += 1
+            user_bucket["processed_series"] += 1
             meta = MetaInfo(mediainfo.title)
             meta.year = mediainfo.year
             meta.type = MediaType.TV
@@ -468,31 +588,72 @@ class EmbyWatchAccelerator(_PluginBase):
                 if no_exists:
                     logger.info(f"{mediainfo.title_year} 状态：{status_text}，执行补全")
                     stats["backfill_attempts"] += 1
+                    user_bucket["backfill_attempts"] += 1
                     if self._backfill_stats_only:
                         logger.info(f"{mediainfo.title_year} 仅统计缺失模式，跳过补全下载")
                         stats["backfill_skipped_stats_only"] += 1
+                        self._append_user_media_result(
+                            stats=stats, user_name=current_user, kind="backfill",
+                            mediainfo=mediainfo, season=current_season, result="仅统计缺失"
+                        )
                     elif self._backfill_series(search_chain, download_chain, mediainfo, meta, no_exists):
                         stats["backfill_downloads"] += 1
+                        user_bucket["backfill_downloads"] += 1
+                        self._append_user_media_result(
+                            stats=stats, user_name=current_user, kind="backfill",
+                            mediainfo=mediainfo, season=current_season, result="已下载"
+                        )
+                    else:
+                        self._append_user_media_result(
+                            stats=stats, user_name=current_user, kind="backfill",
+                            mediainfo=mediainfo, season=current_season, result="未命中资源"
+                        )
                 continue
 
             if actionable_no_exists:
                 logger.info(f"{mediainfo.title_year} 状态：{status_text}，存在缺失集，执行补全")
                 logger.info(f"{mediainfo.title_year} 缺失详情：{self._format_no_exists(actionable_no_exists)}")
                 stats["backfill_attempts"] += 1
+                user_bucket["backfill_attempts"] += 1
                 if self._backfill_stats_only:
                     logger.info(f"{mediainfo.title_year} 仅统计缺失模式，跳过补全下载")
                     stats["backfill_skipped_stats_only"] += 1
+                    self._append_user_media_result(
+                        stats=stats, user_name=current_user, kind="backfill",
+                        mediainfo=mediainfo, season=current_season, result="仅统计缺失"
+                    )
                 elif self._backfill_series(search_chain, download_chain, mediainfo, meta, actionable_no_exists):
                     stats["backfill_downloads"] += 1
+                    user_bucket["backfill_downloads"] += 1
+                    self._append_user_media_result(
+                        stats=stats, user_name=current_user, kind="backfill",
+                        mediainfo=mediainfo, season=current_season, result="已下载"
+                    )
+                else:
+                    self._append_user_media_result(
+                        stats=stats, user_name=current_user, kind="backfill",
+                        mediainfo=mediainfo, season=current_season, result="未命中资源"
+                    )
                 continue
             if no_exists and not actionable_no_exists:
-                logger.info(f"{mediainfo.title_year} 当前缺失均为未播集，跳过补全并进入加速策略")
+                logger.info(f"{mediainfo.title_year} 当前缺失均为未播集，跳过补全并进入追更策略")
 
             if mode == "accelerate":
-                logger.info(f"{mediainfo.title_year} 状态：{status_text}，执行加速更新（缓存匹配）")
+                logger.info(f"{mediainfo.title_year} 状态：{status_text}，执行追更更新（缓存匹配）")
                 stats["accelerate_attempts"] += 1
+                user_bucket["track_attempts"] += 1
                 if self._accelerate_series(search_chain, download_chain, mediainfo, meta, current_season):
                     stats["accelerate_downloads"] += 1
+                    user_bucket["track_downloads"] += 1
+                    self._append_user_media_result(
+                        stats=stats, user_name=current_user, kind="track",
+                        mediainfo=mediainfo, season=current_season, result="已下载"
+                    )
+                else:
+                    self._append_user_media_result(
+                        stats=stats, user_name=current_user, kind="track",
+                        mediainfo=mediainfo, season=current_season, result="未命中资源"
+                    )
 
     def _get_resume_items(self, emby, stats: Optional[Dict[str, int]] = None, server_name: str = "") -> List[dict]:
         users = self._get_emby_users(emby)
@@ -555,9 +716,11 @@ class EmbyWatchAccelerator(_PluginBase):
                     filtered_items.append(episode_item)
                 episode_items = filtered_items
             logger.info(f"用户 {user_name} 继续观看剧集数：{len(episode_items)}")
-            for episode_item in episode_items[:per_user_limit]:
+            selected_items = episode_items[:per_user_limit]
+            self._get_user_bucket(stats, user_name)["resume_items"] += len(selected_items)
+            for episode_item in selected_items:
                 logger.info(f"继续观看候选：{self._resume_item_desc(episode_item)}")
-            all_items.extend(episode_items[:per_user_limit])
+            all_items.extend(selected_items)
             if len(all_items) >= limit:
                 break
         return all_items[:limit]
@@ -765,7 +928,8 @@ class EmbyWatchAccelerator(_PluginBase):
                     "season": int(season) if season else None,
                     "episode": int(episode) if episode else None,
                     "last_played": current_last_played,
-                    "playback_ticks": playback_ticks
+                    "playback_ticks": playback_ticks,
+                    "user": item.get("_mp_user")
                 }
             else:
                 reason_counter["duplicate_older"] += 1
@@ -941,9 +1105,9 @@ class EmbyWatchAccelerator(_PluginBase):
         if not mediakey:
             return False
         contexts = self._accelerate_contexts_from_cache(mediainfo=mediainfo, season=season)
-        logger.info(f"{mediainfo.title_year} 加速缓存命中资源数：{len(contexts)}")
+        logger.info(f"{mediainfo.title_year} 追更缓存命中资源数：{len(contexts)}")
         if not contexts:
-            logger.info(f"{mediainfo.title_year} 加速缓存未命中，跳过本次加速（不触发全站搜索）")
+            logger.info(f"{mediainfo.title_year} 追更缓存未命中，跳过本次追更（不触发全站搜索）")
             return False
 
         exist_info = self.chain.media_exists(mediainfo=mediainfo)
@@ -957,7 +1121,7 @@ class EmbyWatchAccelerator(_PluginBase):
                 continue
             if not set(meta.episode_list).difference(existing_episodes):
                 continue
-            logger.info(f"加速更新下载：{mediainfo.title_year} {meta.season_episode}")
+            logger.info(f"追更更新下载：{mediainfo.title_year} {meta.season_episode}")
             download_chain.download_single(
                 context=context,
                 username=self.plugin_name,
