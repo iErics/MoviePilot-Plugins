@@ -20,13 +20,13 @@ _lock = Lock()
 
 class EmbyWatchAccelerator(_PluginBase):
     # 插件名称
-    plugin_name = "Emby继续观看加速"
+    plugin_name = "Emby追更补全"
     # 插件描述
     plugin_desc = "基于Emby继续观看的剧集记录，自动搜索并追更更新或补全缺失剧集。"
     # 插件图标
     plugin_icon = "download.png"
     # 插件版本
-    plugin_version = "1.0.21"
+    plugin_version = "1.0.22"
     # 插件作者
     plugin_author = "codex"
     # 作者主页
@@ -311,23 +311,13 @@ class EmbyWatchAccelerator(_PluginBase):
                     ]
                 }
             )
-        user_group_content = [
-            {"component": "VCardTitle", "props": {"class": "text-subtitle-1"}, "text": "用户分组统计"},
-            {"component": "VDivider"}
-        ]
         if user_cards:
-            user_group_content.extend(user_cards)
-        else:
-            user_group_content.append({"component": "VCardText", "text": "暂无用户数据"})
+            return user_cards
         return [
             {
                 "component": "VCard",
-                "props": {
-                    "variant": "outlined",
-                    "class": "pa-3",
-                    "style": "border-color:#e9edf4;"
-                },
-                "content": user_group_content
+                "props": {"variant": "outlined", "class": "pa-4", "style": "border-color:#e9edf4;"},
+                "content": [{"component": "VCardText", "text": "暂无用户数据"}]
             }
         ]
 
