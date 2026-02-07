@@ -26,7 +26,7 @@ class EmbyWatchAccelerator(_PluginBase):
     # 插件图标
     plugin_icon = "download.png"
     # 插件版本
-    plugin_version = "1.0.16"
+    plugin_version = "1.0.17"
     # 插件作者
     plugin_author = "codex"
     # 作者主页
@@ -459,18 +459,24 @@ class EmbyWatchAccelerator(_PluginBase):
                         "content": [
                             {
                                 "component": "div",
-                                "props": {"class": "d-flex flex-row flex-nowrap"},
+                                "props": {"class": "d-flex flex-row flex-nowrap align-start"},
                                 "content": [
                                     {
-                                        "component": "VImg",
-                                        "props": {
-                                            "src": item.get("poster") or placeholder_poster,
-                                            "width": 72,
-                                            "height": 108,
-                                            "aspect-ratio": "2/3",
-                                            "class": "rounded mr-2",
-                                            "cover": True
-                                        }
+                                        "component": "div",
+                                        "props": {"class": "mr-2 flex-shrink-0", "style": "width:72px;height:108px;"},
+                                        "content": [
+                                            {
+                                                "component": "VImg",
+                                                "props": {
+                                                    "src": item.get("poster") or placeholder_poster,
+                                                    "width": "72px",
+                                                    "height": "108px",
+                                                    "aspect-ratio": "2/3",
+                                                    "class": "rounded",
+                                                    "cover": True
+                                                }
+                                            }
+                                        ]
                                     },
                                     {
                                         "component": "div",
