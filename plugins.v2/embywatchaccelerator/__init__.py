@@ -26,7 +26,7 @@ class EmbyWatchAccelerator(_PluginBase):
     # 插件图标
     plugin_icon = "download.png"
     # 插件版本
-    plugin_version = "1.0.11"
+    plugin_version = "1.0.12"
     # 插件作者
     plugin_author = "codex"
     # 作者主页
@@ -514,6 +514,7 @@ class EmbyWatchAccelerator(_PluginBase):
             user_id = user.get("Id")
             if not user_id:
                 continue
+            user_name = user.get("Name") or user_id
             url = (f"[HOST]emby/Users/{user_id}/Items/Resume"
                    "?Limit=100&MediaTypes=Video"
                    "&Fields=ProviderIds,SeriesId,ParentIndexNumber,IndexNumber,ProductionYear,Path,AncestorIds"
@@ -528,14 +529,16 @@ class EmbyWatchAccelerator(_PluginBase):
             filtered_by_resume = []
             for episode_item in episode_items:
                 valid, reason = self._is_valid_resume_item(episode_item)
+                tagged_item = dict(episode_item)
+                tagged_item["_mp_user"] = user_name
                 if valid:
                     if reason == "playback_ticks_zero":
-                        logger.info(f"继续保留条目：PlaybackPositionTicks=0，可能为未开始播放的最新集，{self._resume_item_desc(episode_item)}")
-                    filtered_by_resume.append(episode_item)
+                        logger.info(f"继续保留条目：PlaybackPositionTicks=0，可能为未开始播放的最新集，{self._resume_item_desc(tagged_item)}")
+                    filtered_by_resume.append(tagged_item)
                     continue
             episode_items = filtered_by_resume
             if not resume_schema_logged and episode_items:
-                self._log_resume_schema_probe(user_name=user.get("Name") or user_id, episode_items=episode_items)
+                self._log_resume_schema_probe(user_name=user_name, episode_items=episode_items)
                 resume_schema_logged = True
             if blacklist_paths or blacklist_library_ids or blacklist_names:
                 filtered_items = []
@@ -551,7 +554,7 @@ class EmbyWatchAccelerator(_PluginBase):
                         continue
                     filtered_items.append(episode_item)
                 episode_items = filtered_items
-            logger.info(f"用户 {user.get('Name') or user_id} 继续观看剧集数：{len(episode_items)}")
+            logger.info(f"用户 {user_name} 继续观看剧集数：{len(episode_items)}")
             for episode_item in episode_items[:per_user_limit]:
                 logger.info(f"继续观看候选：{self._resume_item_desc(episode_item)}")
             all_items.extend(episode_items[:per_user_limit])
@@ -730,6 +733,7 @@ class EmbyWatchAccelerator(_PluginBase):
             key = f"{series_id}:{season}"
             last_played = item.get("UserData", {}).get("LastPlayedDate")
             last_played_dt = self._parse_last_played(last_played)
+            playback_ticks = self._parse_playback_ticks(item)
             if self._resume_days and last_played_dt:
                 if (now - last_played_dt).days > self._resume_days:
                     reason_counter["out_of_resume_days"] += 1
@@ -745,12 +749,23 @@ class EmbyWatchAccelerator(_PluginBase):
                 else:
                     reason_counter["missing_last_played_kept"] += 1
             record = series_map.get(key)
-            if not record or (last_played_dt and last_played_dt > record.get("last_played", datetime.datetime.min)):
+            record_last_played = (record or {}).get("last_played", datetime.datetime.min)
+            record_ticks = int((record or {}).get("playback_ticks") or 0)
+            current_last_played = last_played_dt or datetime.datetime.min
+            should_replace = False
+            if not record:
+                should_replace = True
+            elif current_last_played > record_last_played:
+                should_replace = True
+            elif current_last_played == record_last_played and playback_ticks > record_ticks:
+                should_replace = True
+            if should_replace:
                 series_map[key] = {
                     "series_id": series_id,
                     "season": int(season) if season else None,
                     "episode": int(episode) if episode else None,
-                    "last_played": last_played_dt or datetime.datetime.min
+                    "last_played": current_last_played,
+                    "playback_ticks": playback_ticks
                 }
             else:
                 reason_counter["duplicate_older"] += 1
@@ -786,13 +801,23 @@ class EmbyWatchAccelerator(_PluginBase):
                 return None
 
     @staticmethod
+    def _parse_playback_ticks(item: Dict[str, Any]) -> int:
+        ticks = (item.get("UserData") or {}).get("PlaybackPositionTicks")
+        try:
+            return int(ticks or 0)
+        except Exception:
+            return 0
+
+    @staticmethod
     def _resume_item_desc(item: Dict[str, Any]) -> str:
+        user_name = item.get("_mp_user")
         series_name = item.get("SeriesName") or item.get("Name") or "未知剧集"
         episode_name = item.get("Name") or "-"
         season = item.get("ParentIndexNumber")
         episode = item.get("IndexNumber")
         item_id = item.get("Id")
-        return f"title={series_name}，episode={episode_name}，S{season}E{episode}，item_id={item_id}"
+        user_prefix = f"user={user_name}，" if user_name else ""
+        return f"{user_prefix}title={series_name}，episode={episode_name}，S{season}E{episode}，item_id={item_id}"
 
     def _get_mediainfo(self, series_info) -> Optional[MediaInfo]:
         mediainfo = None
