@@ -26,7 +26,7 @@ class EmbyWatchAccelerator(_PluginBase):
     # 插件图标
     plugin_icon = "download.png"
     # 插件版本
-    plugin_version = "1.0.15"
+    plugin_version = "1.0.16"
     # 插件作者
     plugin_author = "codex"
     # 作者主页
@@ -238,23 +238,6 @@ class EmbyWatchAccelerator(_PluginBase):
         stats = self.get_data("last_stats") or {}
         if self._hydrate_stats_posters(stats):
             self.save_data("last_stats", stats)
-        logs = self.get_data("logs") or []
-        summary_items = [
-            {"label": "上次运行时间", "value": stats.get("finished_at") or "-"},
-            {"label": "上次运行模式", "value": "追更" if stats.get("mode") == "accelerate" else "补全"},
-            {"label": "耗时(秒)", "value": stats.get("duration_seconds") or "-"},
-            {"label": "服务器数", "value": stats.get("servers") or 0},
-            {"label": "继续观看条目", "value": stats.get("resume_items") or 0},
-            {"label": "去重剧集数", "value": stats.get("series_items") or 0},
-            {"label": "处理剧集数", "value": stats.get("processed_series") or 0},
-            {"label": "追更尝试/下载", "value": f"{stats.get('accelerate_attempts') or 0}/{stats.get('accelerate_downloads') or 0}"},
-            {"label": "补全尝试/下载", "value": f"{stats.get('backfill_attempts') or 0}/{stats.get('backfill_downloads') or 0}"},
-            {"label": "仅统计跳过补全", "value": stats.get("backfill_skipped_stats_only") or 0},
-            {"label": "媒体库黑名单跳过", "value": stats.get("skipped_library_blacklist") or 0},
-            {"label": "跳过非电视剧", "value": stats.get("skipped_non_tv") or 0},
-            {"label": "跳过识别失败", "value": stats.get("skipped_no_mediainfo") or 0},
-            {"label": "跳过详情失败", "value": stats.get("skipped_no_seriesinfo") or 0}
-        ]
         user_stats = stats.get("user_stats") or {}
         user_cards = []
         for user_name in sorted(user_stats.keys()):
@@ -271,7 +254,7 @@ class EmbyWatchAccelerator(_PluginBase):
                             "content": [
                                 {
                                     "component": "VCol",
-                                    "props": {"cols": 12, "md": 6},
+                                    "props": {"cols": 12, "md": 12, "class": "pb-0"},
                                     "content": self._build_user_mode_block(
                                         title="追更",
                                         attempts=user_info.get("track_attempts", 0),
@@ -281,7 +264,7 @@ class EmbyWatchAccelerator(_PluginBase):
                                 },
                                 {
                                     "component": "VCol",
-                                    "props": {"cols": 12, "md": 6},
+                                    "props": {"cols": 12, "md": 12, "class": "pt-0"},
                                     "content": self._build_user_mode_block(
                                         title="补全",
                                         attempts=user_info.get("backfill_attempts", 0),
@@ -309,67 +292,7 @@ class EmbyWatchAccelerator(_PluginBase):
                     "variant": "outlined",
                     "class": "pa-3"
                 },
-                "content": [
-                    {
-                        "component": "VCardTitle",
-                        "props": {"class": "text-subtitle-1"},
-                        "text": "运行统计"
-                    },
-                    {
-                        "component": "VDivider"
-                    },
-                    {
-                        "component": "VList",
-                        "props": {"density": "compact"},
-                        "content": [
-                            {
-                                "component": "VListItem",
-                                "props": {"class": "py-1"},
-                                "content": [
-                                    {"component": "VListItemTitle", "text": f"{item['label']}：{item['value']}"}
-                                ]
-                            } for item in summary_items
-                        ]
-                    }
-                ]
-            },
-            {
-                "component": "VCard",
-                "props": {
-                    "variant": "outlined",
-                    "class": "pa-3 mt-3"
-                },
                 "content": user_group_content
-            },
-            {
-                "component": "VCard",
-                "props": {
-                    "variant": "outlined",
-                    "class": "pa-3 mt-3"
-                },
-                "content": [
-                    {
-                        "component": "VCardTitle",
-                        "props": {"class": "text-subtitle-1"},
-                        "text": "最近日志"
-                    },
-                    {
-                        "component": "VDivider"
-                    },
-                    {
-                        "component": "VList",
-                        "props": {"density": "compact"},
-                        "content": [
-                            {
-                                "component": "VListItem",
-                                "props": {"class": "py-1"},
-                                "content": [
-                                    {"component": "VListItemTitle", "text": item}
-                                ]
-                            } for item in (logs[-50:] if logs else ["暂无日志"])
-                        ]
-                    }
-                ]
             }
         ]
 
@@ -569,9 +492,6 @@ class EmbyWatchAccelerator(_PluginBase):
                                              "text": f"结果：{item.get('result') or '-'}"},
                                             {"component": "VCardText",
                                              "props": {"class": "pa-0"},
-                                             "text": f"封面：{item.get('poster_source') or '-'}"},
-                                            {"component": "VCardText",
-                                             "props": {"class": "pa-0"},
                                              "text": f"时间：{item.get('time') or '-'}"}
                                         ]
                                     }
@@ -584,12 +504,9 @@ class EmbyWatchAccelerator(_PluginBase):
 
         content = [
             {
-                "component": "div",
-                "props": {"class": "d-flex justify-space-between align-center mb-2"},
-                "content": [
-                    {"component": "VCardSubtitle", "props": {"class": "pa-0 font-bold"}, "text": title},
-                    {"component": "VCardText", "props": {"class": "pa-0"}, "text": f"尝试/下载：{attempts}/{downloads}"}
-                ]
+                "component": "VCardSubtitle",
+                "props": {"class": "pa-0 mb-2 font-bold"},
+                "text": f"{title}  尝试/下载：{attempts}/{downloads}"
             }
         ]
         if cards:
