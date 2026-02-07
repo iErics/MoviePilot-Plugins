@@ -26,7 +26,7 @@ class EmbyWatchAccelerator(_PluginBase):
     # 插件图标
     plugin_icon = "download.png"
     # 插件版本
-    plugin_version = "1.0.9"
+    plugin_version = "1.0.10"
     # 插件作者
     plugin_author = "codex"
     # 作者主页
@@ -445,16 +445,22 @@ class EmbyWatchAccelerator(_PluginBase):
             meta.begin_season = current_season
 
             _, no_exists = download_chain.get_no_exists_info(meta=meta, mediainfo=mediainfo)
+            actionable_no_exists = self._trim_no_exists_for_current_airing(
+                no_exists=no_exists,
+                mediainfo=mediainfo,
+                current_season=current_season
+            )
             is_ended, status_reason = self._resolve_season_state(
                 mediainfo=mediainfo,
                 current_season=current_season,
-                no_exists=no_exists
+                no_exists=actionable_no_exists
             )
             status_text = "已完结" if is_ended else "更新中"
             logger.info(
                 f"{mediainfo.title_year} 状态判定：TMDB={mediainfo.status or '-'}，"
                 f"next_season={self._next_episode_season(mediainfo) or '-'}，"
-                f"当前季=S{current_season}，缺失={'是' if no_exists else '否'}，"
+                f"next_episode={self._next_episode_number(mediainfo) or '-'}，"
+                f"当前季=S{current_season}，缺失={'是' if actionable_no_exists else '否'}，"
                 f"结果={status_text}，依据={status_reason}"
             )
 
@@ -469,16 +475,18 @@ class EmbyWatchAccelerator(_PluginBase):
                         stats["backfill_downloads"] += 1
                 continue
 
-            if no_exists:
+            if actionable_no_exists:
                 logger.info(f"{mediainfo.title_year} 状态：{status_text}，存在缺失集，执行补全")
-                logger.info(f"{mediainfo.title_year} 缺失详情：{self._format_no_exists(no_exists)}")
+                logger.info(f"{mediainfo.title_year} 缺失详情：{self._format_no_exists(actionable_no_exists)}")
                 stats["backfill_attempts"] += 1
                 if self._backfill_stats_only:
                     logger.info(f"{mediainfo.title_year} 仅统计缺失模式，跳过补全下载")
                     stats["backfill_skipped_stats_only"] += 1
-                elif self._backfill_series(search_chain, download_chain, mediainfo, meta, no_exists):
+                elif self._backfill_series(search_chain, download_chain, mediainfo, meta, actionable_no_exists):
                     stats["backfill_downloads"] += 1
                 continue
+            if no_exists and not actionable_no_exists:
+                logger.info(f"{mediainfo.title_year} 当前缺失均为未播集，跳过补全并进入加速策略")
 
             if mode == "accelerate":
                 logger.info(f"{mediainfo.title_year} 状态：{status_text}，执行加速更新（缓存匹配）")
@@ -517,8 +525,15 @@ class EmbyWatchAccelerator(_PluginBase):
                 continue
             items = res.json().get("Items") or []
             episode_items = [item for item in items if item.get("Type") == "Episode"]
-            # 跳过已播放完成或无有效播放进度的残留条目，降低“已从继续观看移除但仍被命中”的概率
-            episode_items = [item for item in episode_items if self._is_valid_resume_item(item)]
+            filtered_by_resume = []
+            for episode_item in episode_items:
+                valid, reason = self._is_valid_resume_item(episode_item)
+                if valid:
+                    filtered_by_resume.append(episode_item)
+                    continue
+                if reason == "playback_ticks_zero":
+                    logger.info(f"排除继续观看条目：PlaybackPositionTicks=0，{self._resume_item_desc(episode_item)}")
+            episode_items = filtered_by_resume
             if not resume_schema_logged and episode_items:
                 self._log_resume_schema_probe(user_name=user.get("Name") or user_id, episode_items=episode_items)
                 resume_schema_logged = True
@@ -537,8 +552,6 @@ class EmbyWatchAccelerator(_PluginBase):
                     filtered_items.append(episode_item)
                 episode_items = filtered_items
             logger.info(f"用户 {user.get('Name') or user_id} 继续观看剧集数：{len(episode_items)}")
-            for episode_item in episode_items[:per_user_limit]:
-                logger.info(f"继续观看候选：{self._resume_item_desc(episode_item)}")
             all_items.extend(episode_items[:per_user_limit])
             if len(all_items) >= limit:
                 break
@@ -568,17 +581,19 @@ class EmbyWatchAccelerator(_PluginBase):
         )
 
     @staticmethod
-    def _is_valid_resume_item(item: Dict[str, Any]) -> bool:
+    def _is_valid_resume_item(item: Dict[str, Any]) -> Tuple[bool, str]:
         user_data = item.get("UserData") or {}
         if user_data.get("Played") is True:
-            return False
+            return False, "played_true"
         ticks = user_data.get("PlaybackPositionTicks")
         if ticks is None:
-            return True
+            return True, "ok"
         try:
-            return int(ticks) > 0
+            if int(ticks) > 0:
+                return True, "ok"
+            return False, "playback_ticks_zero"
         except Exception:
-            return True
+            return True, "ok"
 
     def _get_emby_users(self, emby) -> List[dict]:
         res = emby.get_data("[HOST]Users?api_key=[APIKEY]")
@@ -723,12 +738,9 @@ class EmbyWatchAccelerator(_PluginBase):
             elif self._resume_days and not last_played_dt:
                 if last_played:
                     reason_counter["invalid_last_played"] += 1
-                    logger.info(
-                        f"继续保留条目：LastPlayedDate无法解析，{item_desc}，raw={last_played}"
-                    )
+                    pass
                 else:
                     reason_counter["missing_last_played_kept"] += 1
-                    logger.info(f"继续保留条目：缺少LastPlayedDate，{item_desc}")
             record = series_map.get(key)
             if not record or (last_played_dt and last_played_dt > record.get("last_played", datetime.datetime.min)):
                 series_map[key] = {
@@ -739,7 +751,6 @@ class EmbyWatchAccelerator(_PluginBase):
                 }
             else:
                 reason_counter["duplicate_older"] += 1
-                logger.info(f"排除继续观看条目：同剧同季重复且较旧，{item_desc}")
         logger.info(
             "继续观看过滤统计："
             f"缺少series/season={reason_counter['missing_series_or_season']}，"
@@ -837,6 +848,64 @@ class EmbyWatchAccelerator(_PluginBase):
             return int(season_number) if season_number is not None else None
         except Exception:
             return None
+
+    @staticmethod
+    def _next_episode_number(mediainfo: MediaInfo) -> Optional[int]:
+        next_ep = mediainfo.next_episode_to_air or {}
+        if not isinstance(next_ep, dict):
+            return None
+        episode_number = next_ep.get("episode_number")
+        try:
+            return int(episode_number) if episode_number is not None else None
+        except Exception:
+            return None
+
+    def _trim_no_exists_for_current_airing(
+            self,
+            no_exists: Dict[int, Dict[int, NotExistMediaInfo]],
+            mediainfo: MediaInfo,
+            current_season: int) -> Dict[int, Dict[int, NotExistMediaInfo]]:
+        if not no_exists:
+            return {}
+        aired_upper = self._current_season_aired_upper_bound(mediainfo=mediainfo, current_season=current_season)
+        if aired_upper is None:
+            return no_exists
+        trimmed: Dict[int, Dict[int, NotExistMediaInfo]] = {}
+        for media_key, season_map in (no_exists or {}).items():
+            for season, info in (season_map or {}).items():
+                season_no_exists = trimmed.setdefault(media_key, {})
+                if int(season) != int(current_season):
+                    season_no_exists[season] = info
+                    continue
+                episodes = sorted(set(info.episodes or []))
+                if episodes:
+                    actionable_episodes = [ep for ep in episodes if ep <= aired_upper]
+                else:
+                    actionable_episodes = list(range(1, aired_upper + 1)) if aired_upper > 0 else []
+                if not actionable_episodes:
+                    continue
+                season_no_exists[season] = NotExistMediaInfo(
+                    season=info.season,
+                    episodes=actionable_episodes,
+                    total_episode=min(info.total_episode or aired_upper, aired_upper),
+                    start_episode=min(actionable_episodes)
+                )
+            if media_key in trimmed and not trimmed.get(media_key):
+                trimmed.pop(media_key, None)
+        return trimmed
+
+    def _current_season_aired_upper_bound(self, mediainfo: MediaInfo, current_season: int) -> Optional[int]:
+        next_season = self._next_episode_season(mediainfo)
+        next_episode = self._next_episode_number(mediainfo)
+        season_episodes = sorted(set((mediainfo.seasons or {}).get(current_season) or []))
+        season_max = max(season_episodes) if season_episodes else None
+        if next_season == current_season and next_episode:
+            return max(next_episode - 1, 0)
+        if next_season and next_season > current_season:
+            return season_max
+        if self._is_ended(mediainfo):
+            return season_max
+        return None
 
     def _accelerate_series(self, search_chain: SearchChain, download_chain: DownloadChain,
                            mediainfo: MediaInfo, meta: MetaInfo, season: int) -> bool:
