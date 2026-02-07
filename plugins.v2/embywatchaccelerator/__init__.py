@@ -26,7 +26,7 @@ class EmbyWatchAccelerator(_PluginBase):
     # 插件图标
     plugin_icon = "download.png"
     # 插件版本
-    plugin_version = "1.0.13"
+    plugin_version = "1.0.14"
     # 插件作者
     plugin_author = "codex"
     # 作者主页
@@ -257,8 +257,6 @@ class EmbyWatchAccelerator(_PluginBase):
         user_cards = []
         for user_name in sorted(user_stats.keys()):
             user_info = user_stats.get(user_name) or {}
-            track_items = user_info.get("track_items") or []
-            backfill_items = user_info.get("backfill_items") or []
             user_cards.append(
                 {
                     "component": "VCard",
@@ -272,48 +270,22 @@ class EmbyWatchAccelerator(_PluginBase):
                                 {
                                     "component": "VCol",
                                     "props": {"cols": 12, "md": 6},
-                                    "content": [
-                                        {"component": "VCardSubtitle", "text": "追更"},
-                                        {"component": "VCardText",
-                                         "text": f"尝试/下载：{user_info.get('track_attempts', 0)}/{user_info.get('track_downloads', 0)}"},
-                                        {
-                                            "component": "VList",
-                                            "props": {"density": "compact"},
-                                            "content": [
-                                                {
-                                                    "component": "VListItem",
-                                                    "content": [
-                                                        {"component": "VListItemTitle",
-                                                         "text": f"{i.get('title', '-')}"
-                                                                 f" ({i.get('year') or '-'}) S{i.get('season') or '-'} · {i.get('result', '-')}"}
-                                                    ]
-                                                } for i in (track_items[-20:] if track_items else [{"title": "暂无"}])
-                                            ]
-                                        }
-                                    ]
+                                    "content": self._build_user_mode_block(
+                                        title="追更",
+                                        attempts=user_info.get("track_attempts", 0),
+                                        downloads=user_info.get("track_downloads", 0),
+                                        items=user_info.get("track_items") or []
+                                    )
                                 },
                                 {
                                     "component": "VCol",
                                     "props": {"cols": 12, "md": 6},
-                                    "content": [
-                                        {"component": "VCardSubtitle", "text": "补全"},
-                                        {"component": "VCardText",
-                                         "text": f"尝试/下载：{user_info.get('backfill_attempts', 0)}/{user_info.get('backfill_downloads', 0)}"},
-                                        {
-                                            "component": "VList",
-                                            "props": {"density": "compact"},
-                                            "content": [
-                                                {
-                                                    "component": "VListItem",
-                                                    "content": [
-                                                        {"component": "VListItemTitle",
-                                                         "text": f"{i.get('title', '-')}"
-                                                                 f" ({i.get('year') or '-'}) S{i.get('season') or '-'} · {i.get('result', '-')}"}
-                                                    ]
-                                                } for i in (backfill_items[-20:] if backfill_items else [{"title": "暂无"}])
-                                            ]
-                                        }
-                                    ]
+                                    "content": self._build_user_mode_block(
+                                        title="补全",
+                                        attempts=user_info.get("backfill_attempts", 0),
+                                        downloads=user_info.get("backfill_downloads", 0),
+                                        items=user_info.get("backfill_items") or []
+                                    )
                                 }
                             ]
                         }
@@ -446,8 +418,82 @@ class EmbyWatchAccelerator(_PluginBase):
             "title": mediainfo.title,
             "year": mediainfo.year,
             "season": season,
-            "result": result
+            "result": result,
+            "poster": mediainfo.poster_path,
+            "type": str(getattr(mediainfo.type, "value", mediainfo.type) or "电视剧"),
+            "time": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         })
+
+    @staticmethod
+    def _build_user_mode_block(title: str, attempts: int, downloads: int, items: List[Dict[str, Any]]) -> List[dict]:
+        cards = []
+        for item in (items[-12:] if items else []):
+            cards.append({
+                "component": "VCol",
+                "props": {"cols": 12, "md": 6, "xl": 4},
+                "content": [
+                    {
+                        "component": "VCard",
+                        "props": {"variant": "tonal", "class": "pa-2 h-100"},
+                        "content": [
+                            {
+                                "component": "div",
+                                "props": {"class": "d-flex flex-row flex-nowrap"},
+                                "content": [
+                                    {
+                                        "component": "VImg",
+                                        "props": {
+                                            "src": item.get("poster"),
+                                            "width": 72,
+                                            "height": 108,
+                                            "aspect-ratio": "2/3",
+                                            "class": "rounded mr-2",
+                                            "cover": True
+                                        }
+                                    } if item.get("poster") else {
+                                        "component": "div",
+                                        "props": {"class": "mr-2", "style": "width:72px;height:108px;"},
+                                        "text": ""
+                                    },
+                                    {
+                                        "component": "div",
+                                        "content": [
+                                            {"component": "VCardSubtitle",
+                                             "props": {"class": "pa-0 font-bold"},
+                                             "text": item.get("title") or "-"},
+                                            {"component": "VCardText",
+                                             "props": {"class": "pa-0"},
+                                             "text": f"类型：{item.get('type') or '电视剧'}"},
+                                            {"component": "VCardText",
+                                             "props": {"class": "pa-0"},
+                                             "text": f"年份：{item.get('year') or '-'}"},
+                                            {"component": "VCardText",
+                                             "props": {"class": "pa-0"},
+                                             "text": f"季度：第{item.get('season')}季" if item.get("season") else "季度：-"},
+                                            {"component": "VCardText",
+                                             "props": {"class": "pa-0"},
+                                             "text": f"结果：{item.get('result') or '-'}"},
+                                            {"component": "VCardText",
+                                             "props": {"class": "pa-0"},
+                                             "text": f"时间：{item.get('time') or '-'}"}
+                                        ]
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                ]
+            })
+
+        content = [
+            {"component": "VCardSubtitle", "props": {"class": "pa-0 font-bold"}, "text": title},
+            {"component": "VCardText", "props": {"class": "pa-0 mb-2"}, "text": f"尝试/下载：{attempts}/{downloads}"}
+        ]
+        if cards:
+            content.append({"component": "VRow", "content": cards})
+        else:
+            content.append({"component": "VCardText", "props": {"class": "pa-0"}, "text": "暂无记录"})
+        return content
 
     def _process(self, mode: str):
         if not self._enabled:
