@@ -1,4 +1,5 @@
 import datetime
+import re
 from threading import Lock
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -25,7 +26,7 @@ class EmbyWatchAccelerator(_PluginBase):
     # 插件图标
     plugin_icon = "download.png"
     # 插件版本
-    plugin_version = "1.0.8"
+    plugin_version = "1.0.9"
     # 插件作者
     plugin_author = "codex"
     # 作者主页
@@ -516,6 +517,8 @@ class EmbyWatchAccelerator(_PluginBase):
                 continue
             items = res.json().get("Items") or []
             episode_items = [item for item in items if item.get("Type") == "Episode"]
+            # 跳过已播放完成或无有效播放进度的残留条目，降低“已从继续观看移除但仍被命中”的概率
+            episode_items = [item for item in episode_items if self._is_valid_resume_item(item)]
             if not resume_schema_logged and episode_items:
                 self._log_resume_schema_probe(user_name=user.get("Name") or user_id, episode_items=episode_items)
                 resume_schema_logged = True
@@ -555,12 +558,27 @@ class EmbyWatchAccelerator(_PluginBase):
                 "IndexNumber": item.get("IndexNumber"),
                 "Path": item.get("Path"),
                 "AncestorIds": item.get("AncestorIds"),
+                "PlaybackPositionTicks": (item.get("UserData") or {}).get("PlaybackPositionTicks"),
+                "LastPlayedDate": (item.get("UserData") or {}).get("LastPlayedDate"),
                 "keys": sorted(list(item.keys()))
             })
         logger.info(
             f"Resume字段探针：user={user_name}，样本数={sample_size}，"
             f"样本摘要={sample_payload}"
         )
+
+    @staticmethod
+    def _is_valid_resume_item(item: Dict[str, Any]) -> bool:
+        user_data = item.get("UserData") or {}
+        if user_data.get("Played") is True:
+            return False
+        ticks = user_data.get("PlaybackPositionTicks")
+        if ticks is None:
+            return True
+        try:
+            return int(ticks) > 0
+        except Exception:
+            return True
 
     def _get_emby_users(self, emby) -> List[dict]:
         res = emby.get_data("[HOST]Users?api_key=[APIKEY]")
@@ -581,22 +599,27 @@ class EmbyWatchAccelerator(_PluginBase):
         raw = self._library_blacklist or ""
         rules: List[str] = []
         global_rules: List[str] = []
+        current_server = (server_name or "").strip().lower()
         for line in raw.splitlines():
             stripped = line.strip()
             if not stripped:
                 continue
-            if ":" not in stripped:
-                for token in stripped.replace("，", ",").split(","):
-                    parsed = token.strip().lower()
-                    if parsed:
-                        global_rules.append(parsed)
-                continue
-            rule_server, rule_library = stripped.split(":", 1)
-            if rule_server.strip().lower() != (server_name or "").strip().lower():
-                continue
-            token = rule_library.strip().lower()
-            if token:
-                rules.append(token)
+            segments = [seg.strip() for seg in stripped.replace("，", ",").split(",") if seg.strip()]
+            for segment in segments:
+                # 允许 server:library 与 server：library 两种写法，且支持同一行多条
+                match = re.match(r"^([^:：]+)\s*[:：]\s*(.+)$", segment)
+                if not match:
+                    global_rules.append(segment.lower())
+                    continue
+                rule_server = match.group(1).strip().lower()
+                rule_library = match.group(2).strip().lower()
+                if not rule_library:
+                    continue
+                if rule_server in {"*", "all", "全部"}:
+                    global_rules.append(rule_library)
+                    continue
+                if rule_server == current_server:
+                    rules.append(rule_library)
         all_rules = global_rules + rules
         if not all_rules:
             return set(), [], set()
@@ -609,6 +632,8 @@ class EmbyWatchAccelerator(_PluginBase):
             libraries = emby.get_emby_virtual_folders() or []
         except Exception:
             libraries = []
+        if not libraries:
+            logger.warning(f"Emby虚拟库列表为空，server={server_name or '-'}")
         for lib in libraries:
             raw_id_keys = [lib.get("Id"), lib.get("ItemId"), lib.get("CollectionFolderId")]
             lib_ids = [str(raw_id).strip().lower() for raw_id in raw_id_keys if raw_id]
@@ -631,6 +656,10 @@ class EmbyWatchAccelerator(_PluginBase):
             logger.warning(
                 f"媒体库黑名单未匹配到Emby虚拟库：server={server_name or '-'}，"
                 f"规则={','.join(sorted(token_set))}"
+            )
+            library_names = [str(lib.get("Name") or "-") for lib in libraries[:30]]
+            logger.warning(
+                f"Emby虚拟库候选（最多30条）：{library_names if library_names else '[]'}"
             )
         return configured_name_tokens, library_paths, library_ids
 
