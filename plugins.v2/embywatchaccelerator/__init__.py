@@ -26,7 +26,7 @@ class EmbyWatchAccelerator(_PluginBase):
     # 插件图标
     plugin_icon = "download.png"
     # 插件版本
-    plugin_version = "1.0.18"
+    plugin_version = "1.0.19"
     # 插件作者
     plugin_author = "codex"
     # 作者主页
@@ -242,6 +242,39 @@ class EmbyWatchAccelerator(_PluginBase):
         user_cards = []
         for user_name in sorted(user_stats.keys()):
             user_info = user_stats.get(user_name) or {}
+            track_items = user_info.get("track_items") or []
+            backfill_items = user_info.get("backfill_items") or []
+            # 两个栏目都无数据时，隐藏该用户
+            if not track_items and not backfill_items:
+                continue
+
+            mode_blocks = []
+            if track_items:
+                mode_blocks.append(
+                    {
+                        "component": "VCol",
+                        "props": {"cols": 12, "class": "pb-0"},
+                        "content": self._build_user_mode_block(
+                            title="追更",
+                            attempts=0,
+                            downloads=0,
+                            items=track_items
+                        )
+                    }
+                )
+            if backfill_items:
+                mode_blocks.append(
+                    {
+                        "component": "VCol",
+                        "props": {"cols": 12, "class": "pt-2"},
+                        "content": self._build_user_mode_block(
+                            title="补全",
+                            attempts=0,
+                            downloads=0,
+                            items=backfill_items
+                        )
+                    }
+                )
             user_cards.append(
                 {
                     "component": "VCard",
@@ -273,28 +306,7 @@ class EmbyWatchAccelerator(_PluginBase):
                         {"component": "VDivider"},
                         {
                             "component": "VRow",
-                            "content": [
-                                {
-                                    "component": "VCol",
-                                    "props": {"cols": 12, "class": "pb-0"},
-                                    "content": self._build_user_mode_block(
-                                        title="追更",
-                                        attempts=0,
-                                        downloads=0,
-                                        items=user_info.get("track_items") or []
-                                    )
-                                },
-                                {
-                                    "component": "VCol",
-                                    "props": {"cols": 12, "class": "pt-2"},
-                                    "content": self._build_user_mode_block(
-                                        title="补全",
-                                        attempts=0,
-                                        downloads=0,
-                                        items=user_info.get("backfill_items") or []
-                                    )
-                                }
-                            ]
+                            "content": mode_blocks
                         }
                     ]
                 }
@@ -477,7 +489,7 @@ class EmbyWatchAccelerator(_PluginBase):
                 "content": [
                     {
                         "component": "VCard",
-                        "props": {"variant": "tonal", "class": "pa-2 h-100", "style": "max-width:320px;"},
+                        "props": {"variant": "tonal", "class": "pa-2 h-100", "style": "max-width:360px;width:100%;"},
                         "content": [
                             {
                                 "component": "div",
@@ -519,7 +531,7 @@ class EmbyWatchAccelerator(_PluginBase):
                                              "props": {"class": "pa-0"},
                                              "text": f"结果：{item.get('result') or '-'}"},
                                             {"component": "VCardText",
-                                             "props": {"class": "pa-0"},
+                                             "props": {"class": "pa-0 text-no-wrap"},
                                              "text": f"时间：{item.get('time') or '-'}"}
                                         ]
                                     }
