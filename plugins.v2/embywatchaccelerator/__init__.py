@@ -27,7 +27,7 @@ class EmbyWatchAccelerator(_PluginBase):
     # 插件图标
     plugin_icon = "download.png"
     # 插件版本
-    plugin_version = "1.0.35"
+    plugin_version = "1.0.36"
     # 插件作者
     plugin_author = "codex"
     # 作者主页
@@ -595,7 +595,7 @@ class EmbyWatchAccelerator(_PluginBase):
                     "title": item.get("series_name") or item.get("title") or "未知剧集",
                     "year": item.get("year"),
                     "season": int(season),
-                    "result": item.get("last_track_result") or "候选池",
+                    "result": self._display_track_result(item.get("last_track_result") or "候选池"),
                     "poster": item.get("poster") or "",
                     "poster_source": item.get("poster_source") or "candidate_pool",
                     "series_id": series_id,
@@ -618,6 +618,15 @@ class EmbyWatchAccelerator(_PluginBase):
                 if user_name not in user_stats and self._normalize_user_label(user_name) == "最近入库":
                     changed = True
         return changed
+
+    @staticmethod
+    def _display_track_result(raw_result: str) -> str:
+        text = str(raw_result or "").strip()
+        if not text:
+            return "候选池"
+        if text.startswith("门控跳过："):
+            return "未到更新时间"
+        return text
 
     def _build_candidate_pool_page(self) -> List[dict]:
         all_servers = self.get_data(self._candidate_pool_storage_key()) or {}
