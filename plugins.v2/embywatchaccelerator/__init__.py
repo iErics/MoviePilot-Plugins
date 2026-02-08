@@ -26,7 +26,7 @@ class EmbyWatchAccelerator(_PluginBase):
     # 插件图标
     plugin_icon = "download.png"
     # 插件版本
-    plugin_version = "1.0.32"
+    plugin_version = "1.0.33"
     # 插件作者
     plugin_author = "codex"
     # 作者主页
@@ -381,7 +381,11 @@ class EmbyWatchAccelerator(_PluginBase):
             self.save_data("last_stats", stats)
         user_stats = stats.get("user_stats") or {}
         user_cards = []
-        for user_name in sorted(user_stats.keys()):
+        sorted_users = sorted(
+            user_stats.keys(),
+            key=lambda name: (1 if name == "最近入库" else 0, str(name).lower())
+        )
+        for user_name in sorted_users:
             user_info = user_stats.get(user_name) or {}
             track_items = user_info.get("track_items") or []
             backfill_items = user_info.get("backfill_items") or []
@@ -809,8 +813,9 @@ class EmbyWatchAccelerator(_PluginBase):
         )
         sorted_items = sorted(items or [], key=self._parse_stat_item_time, reverse=True)
         preview_items = sorted_items[:12]
+        remain_items = sorted_items[12:]
         preview_cards = self._build_stat_cards(preview_items, placeholder_poster)
-        all_cards = self._build_stat_cards(sorted_items, placeholder_poster)
+        remain_cards = self._build_stat_cards(remain_items, placeholder_poster)
 
         content = [
             {
@@ -837,7 +842,7 @@ class EmbyWatchAccelerator(_PluginBase):
         ]
         if preview_cards:
             content.append({"component": "VRow", "props": {"class": "ma-0"}, "content": preview_cards})
-            if len(sorted_items) > 12:
+            if remain_items:
                 content.append({
                     "component": "VExpansionPanels",
                     "props": {"variant": "accordion", "class": "mt-1"},
@@ -847,12 +852,12 @@ class EmbyWatchAccelerator(_PluginBase):
                             "content": [
                                 {
                                     "component": "VExpansionPanelTitle",
-                                    "text": f"展开查看全部（{len(sorted_items)} 条）"
+                                    "text": f"展开查看更多（{len(sorted_items)} 条）"
                                 },
                                 {
                                     "component": "VExpansionPanelText",
                                     "content": [
-                                        {"component": "VRow", "props": {"class": "ma-0 pt-2"}, "content": all_cards}
+                                        {"component": "VRow", "props": {"class": "ma-0 pt-2"}, "content": remain_cards}
                                     ]
                                 }
                             ]
