@@ -26,7 +26,7 @@ class EmbyWatchAccelerator(_PluginBase):
     # 插件图标
     plugin_icon = "download.png"
     # 插件版本
-    plugin_version = "1.0.29"
+    plugin_version = "1.0.30"
     # 插件作者
     plugin_author = "codex"
     # 作者主页
@@ -700,11 +700,11 @@ class EmbyWatchAccelerator(_PluginBase):
         for item in (items[-12:] if items else []):
             cards.append({
                 "component": "VCol",
-                "props": {"cols": 12, "sm": 6, "md": 4, "lg": 3, "class": "pa-0 pr-4 pb-4"},
+                "props": {"cols": 12, "sm": 6, "md": 4, "lg": 3, "class": "px-2 pb-4"},
                 "content": [
                     {
                         "component": "VCard",
-                        "props": {"variant": "tonal", "class": "pa-2 h-100", "style": "max-width:360px;width:100%;"},
+                        "props": {"variant": "tonal", "class": "pa-2 h-100", "style": "max-width:332px;"},
                         "content": [
                             {
                                 "component": "div",
@@ -1503,7 +1503,7 @@ class EmbyWatchAccelerator(_PluginBase):
             if item.get("Type") != "Episode":
                 continue
             tagged_item = dict(item)
-            tagged_item["_mp_user"] = "system"
+            tagged_item["_mp_user"] = "最近入库"
             if self._is_blacklisted_library_item(
                     tagged_item,
                     blacklisted_paths=blacklist_paths,
@@ -1795,7 +1795,7 @@ class EmbyWatchAccelerator(_PluginBase):
                 "series_name": item.get("SeriesName") or item.get("Name"),
                 "last_played": datetime.datetime.min,
                 "playback_ticks": 0,
-                "user": "system",
+                "user": "最近入库",
                 "_source": "recent_added"
             }
         logger.info(f"最近新增去重后剧集数：{len(series_map)}")
