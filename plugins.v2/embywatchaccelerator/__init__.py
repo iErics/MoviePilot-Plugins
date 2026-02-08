@@ -26,7 +26,7 @@ class EmbyWatchAccelerator(_PluginBase):
     # 插件图标
     plugin_icon = "download.png"
     # 插件版本
-    plugin_version = "1.0.25"
+    plugin_version = "1.0.26"
     # 插件作者
     plugin_author = "codex"
     # 作者主页
@@ -50,6 +50,7 @@ class EmbyWatchAccelerator(_PluginBase):
     _backfill_stats_only: bool = False
     _max_log_records: int = 200
     _run_once: bool = False
+    _candidate_retention_days: int = 30
 
     def init_plugin(self, config: dict = None):
         # 停止现有任务
@@ -578,6 +579,8 @@ class EmbyWatchAccelerator(_PluginBase):
             "servers": 0,
             "resume_items": 0,
             "series_items": 0,
+            "candidate_pool_items": 0,
+            "merged_series_items": 0,
             "processed_series": 0,
             "accelerate_attempts": 0,
             "accelerate_downloads": 0,
@@ -614,7 +617,8 @@ class EmbyWatchAccelerator(_PluginBase):
             logger.info(
                 f"继续观看任务结束，模式：{mode}，耗时：{cost:.2f}秒，"
                 f"服务器数：{stats['servers']}，继续观看条目：{stats['resume_items']}，"
-                f"去重剧集数：{stats['series_items']}，处理剧集数：{stats['processed_series']}，"
+                f"去重剧集数：{stats['series_items']}，候选池剧集数：{stats['candidate_pool_items']}，"
+                f"联合处理剧集数：{stats['merged_series_items']}，处理剧集数：{stats['processed_series']}，"
                 f"追更尝试/下载：{stats['accelerate_attempts']}/{stats['accelerate_downloads']}，"
                 f"补全尝试/下载：{stats['backfill_attempts']}/{stats['backfill_downloads']}，"
                 f"仅统计跳过补全：{stats['backfill_skipped_stats_only']}，"
@@ -625,6 +629,7 @@ class EmbyWatchAccelerator(_PluginBase):
             )
             self._append_log(
                 f"任务结束，模式：{mode}，耗时：{cost:.2f}秒，"
+                f"候选池剧集数：{stats['candidate_pool_items']}，"
                 f"追更尝试/下载：{stats['accelerate_attempts']}/{stats['accelerate_downloads']}，"
                 f"补全尝试/下载：{stats['backfill_attempts']}/{stats['backfill_downloads']}，"
                 f"仅统计跳过补全：{stats['backfill_skipped_stats_only']}，"
@@ -635,15 +640,31 @@ class EmbyWatchAccelerator(_PluginBase):
     def _process_emby_service(self, emby, mode: str, stats: Dict[str, int], server_name: str = ""):
         resume_items = self._get_resume_items(emby, stats, server_name)
         if not resume_items:
-            logger.info("未获取到继续观看的剧集记录")
-            return
-        stats["resume_items"] += len(resume_items)
-        series_items = self._merge_resume_series(resume_items)
+            logger.info("未获取到继续观看的剧集记录，将仅使用追更候选池")
+        else:
+            stats["resume_items"] += len(resume_items)
+        resume_series_items = self._merge_resume_series(resume_items) if resume_items else []
+        stats["series_items"] += len(resume_series_items)
+
+        candidate_pool = self._load_candidate_pool(server_name=server_name)
+        candidate_pool = self._prune_candidate_pool(candidate_pool)
+        self._upsert_candidate_pool_from_resume(candidate_pool=candidate_pool, resume_series_items=resume_series_items)
+        candidate_series_items = self._candidate_pool_to_series_items(candidate_pool=candidate_pool)
+        stats["candidate_pool_items"] += len(candidate_series_items)
+
+        series_items = self._merge_series_items(
+            resume_series_items=resume_series_items,
+            candidate_series_items=candidate_series_items
+        )
+        stats["merged_series_items"] += len(series_items)
+        logger.info(
+            f"本轮待处理剧集：继续观看={len(resume_series_items)}，"
+            f"候选池={len(candidate_series_items)}，联合去重后={len(series_items)}"
+        )
         if not series_items:
-            logger.info("继续观看记录过滤后为空")
+            logger.info("继续观看与追更候选池均为空，跳过本轮")
+            self._save_candidate_pool(server_name=server_name, candidate_pool=candidate_pool)
             return
-        stats["series_items"] += len(series_items)
-        logger.info(f"继续观看剧集数：{len(series_items)}")
 
         download_chain = DownloadChain()
         search_chain = SearchChain()
@@ -652,8 +673,11 @@ class EmbyWatchAccelerator(_PluginBase):
             series_id = item.get("series_id")
             current_season = item.get("season")
             current_user = item.get("user")
+            source = item.get("_source") or "unknown"
+            candidate_key = self._candidate_key(series_id=series_id, season=current_season)
             if not series_id or not current_season:
                 continue
+            logger.info(f"处理剧集来源：{source}，series_id={series_id}，season=S{current_season}，user={current_user or '-'}")
             user_bucket = self._get_user_bucket(stats, current_user)
             user_bucket["series_items"] += 1
 
@@ -672,6 +696,7 @@ class EmbyWatchAccelerator(_PluginBase):
             if mediainfo.type != MediaType.TV:
                 logger.info(f"跳过非电视剧：{mediainfo.title_year}")
                 stats["skipped_non_tv"] += 1
+                candidate_pool.pop(candidate_key, None)
                 continue
 
             stats["processed_series"] += 1
@@ -728,6 +753,9 @@ class EmbyWatchAccelerator(_PluginBase):
                             mediainfo=mediainfo, season=current_season, result="未命中资源",
                             series_id=series_id, server_name=server_name, emby=emby
                         )
+                else:
+                    logger.info(f"{mediainfo.title_year} 已完结且无缺失，从追更候选池移除")
+                    candidate_pool.pop(candidate_key, None)
                 continue
 
             if actionable_no_exists:
@@ -779,6 +807,102 @@ class EmbyWatchAccelerator(_PluginBase):
                         mediainfo=mediainfo, season=current_season, result="未命中资源",
                         series_id=series_id, server_name=server_name, emby=emby
                     )
+        self._save_candidate_pool(server_name=server_name, candidate_pool=candidate_pool)
+
+    @staticmethod
+    def _candidate_key(series_id: Optional[str], season: Optional[int]) -> str:
+        return f"{series_id}:{season}"
+
+    @staticmethod
+    def _candidate_pool_storage_key() -> str:
+        return "track_candidate_pool"
+
+    def _load_candidate_pool(self, server_name: str) -> Dict[str, Dict[str, Any]]:
+        all_servers = self.get_data(self._candidate_pool_storage_key()) or {}
+        server_key = (server_name or "default").strip() or "default"
+        server_pool = all_servers.get(server_key) or {}
+        if isinstance(server_pool, dict):
+            return dict(server_pool)
+        return {}
+
+    def _save_candidate_pool(self, server_name: str, candidate_pool: Dict[str, Dict[str, Any]]) -> None:
+        all_servers = self.get_data(self._candidate_pool_storage_key()) or {}
+        if not isinstance(all_servers, dict):
+            all_servers = {}
+        server_key = (server_name or "default").strip() or "default"
+        all_servers[server_key] = candidate_pool
+        self.save_data(self._candidate_pool_storage_key(), all_servers)
+
+    def _prune_candidate_pool(self, candidate_pool: Dict[str, Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+        now = datetime.datetime.now()
+        pruned: Dict[str, Dict[str, Any]] = {}
+        removed = 0
+        for key, item in (candidate_pool or {}).items():
+            last_seen_str = str(item.get("last_seen_at") or "").strip()
+            last_seen_dt = self._parse_last_played(last_seen_str) if last_seen_str else None
+            if not last_seen_dt:
+                last_seen_dt = now
+            if (now - last_seen_dt).days > self._candidate_retention_days:
+                removed += 1
+                continue
+            pruned[key] = item
+        if removed:
+            logger.info(f"追更候选池清理过期条目：{removed}")
+        return pruned
+
+    def _upsert_candidate_pool_from_resume(
+            self,
+            candidate_pool: Dict[str, Dict[str, Any]],
+            resume_series_items: List[Dict[str, Any]]) -> None:
+        now = datetime.datetime.now().isoformat()
+        for item in resume_series_items:
+            series_id = str(item.get("series_id") or "").strip()
+            season = item.get("season")
+            if not series_id or season is None:
+                continue
+            key = self._candidate_key(series_id=series_id, season=season)
+            candidate_pool[key] = {
+                "series_id": series_id,
+                "season": int(season),
+                "episode": item.get("episode"),
+                "user": item.get("user"),
+                "last_played": (item.get("last_played") or datetime.datetime.min).isoformat(),
+                "playback_ticks": int(item.get("playback_ticks") or 0),
+                "last_seen_at": now
+            }
+
+    @staticmethod
+    def _candidate_pool_to_series_items(candidate_pool: Dict[str, Dict[str, Any]]) -> List[Dict[str, Any]]:
+        result: List[Dict[str, Any]] = []
+        for _, item in (candidate_pool or {}).items():
+            series_id = str(item.get("series_id") or "").strip()
+            season = item.get("season")
+            if not series_id or season is None:
+                continue
+            result.append({
+                "series_id": series_id,
+                "season": int(season),
+                "episode": item.get("episode"),
+                "last_played": datetime.datetime.min,
+                "playback_ticks": int(item.get("playback_ticks") or 0),
+                "user": item.get("user"),
+                "_source": "candidate_pool"
+            })
+        return result
+
+    @staticmethod
+    def _merge_series_items(
+            resume_series_items: List[Dict[str, Any]],
+            candidate_series_items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        merged: Dict[str, Dict[str, Any]] = {}
+        for item in candidate_series_items:
+            key = f"{item.get('series_id')}:{item.get('season')}"
+            merged[key] = item
+        for item in resume_series_items:
+            key = f"{item.get('series_id')}:{item.get('season')}"
+            item["_source"] = "resume"
+            merged[key] = item
+        return list(merged.values())
 
     def _get_resume_items(self, emby, stats: Optional[Dict[str, int]] = None, server_name: str = "") -> List[dict]:
         users = self._get_emby_users(emby)
