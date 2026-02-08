@@ -26,7 +26,7 @@ class EmbyWatchAccelerator(_PluginBase):
     # 插件图标
     plugin_icon = "download.png"
     # 插件版本
-    plugin_version = "1.0.30"
+    plugin_version = "1.0.31"
     # 插件作者
     plugin_author = "codex"
     # 作者主页
@@ -761,7 +761,7 @@ class EmbyWatchAccelerator(_PluginBase):
         content = [
             {
                 "component": "div",
-                "props": {"class": "position-relative mb-4", "style": "height:24px;"},
+                "props": {"class": "position-relative mb-2", "style": "height:24px;"},
                 "content": [
                     {
                         "component": "VDivider",
@@ -1034,7 +1034,8 @@ class EmbyWatchAccelerator(_PluginBase):
                         mediainfo=mediainfo, season=current_season, result="未命中资源",
                         series_id=series_id, server_name=server_name, emby=emby
                     )
-                continue
+                if mode == "accelerate":
+                    logger.info(f"{mediainfo.title_year} 更新中且存在缺失，补全后继续执行追更")
             if no_exists and not actionable_no_exists:
                 logger.info(f"{mediainfo.title_year} 当前缺失均为未播集，跳过补全并进入追更策略")
 
