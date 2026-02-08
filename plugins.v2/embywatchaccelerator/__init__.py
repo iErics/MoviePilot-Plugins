@@ -15,7 +15,6 @@ from app.log import logger
 from app.plugins import _PluginBase
 from app.schemas import NotExistMediaInfo
 from app.schemas.types import MediaType
-from app.db.downloadhistory_oper import DownloadHistoryOper
 
 _lock = Lock()
 
@@ -28,7 +27,7 @@ class EmbyWatchAccelerator(_PluginBase):
     # 插件图标
     plugin_icon = "download.png"
     # 插件版本
-    plugin_version = "1.0.37"
+    plugin_version = "1.0.38"
     # 插件作者
     plugin_author = "codex"
     # 作者主页
@@ -2282,61 +2281,8 @@ class EmbyWatchAccelerator(_PluginBase):
         except Exception:
             pass
 
-        history_offset = self._load_offset_from_download_history(mediainfo=mediainfo)
-        if history_offset is not None:
-            candidate_item["learned_hit_minutes"] = int(history_offset)
-            return int(history_offset), "download_history"
-
         # 无历史命中时间：当天按默认间隔执行，时间点默认为当天00:00（再叠加buffer）
         return 0, "default_day_start"
-
-    def _load_offset_from_download_history(self, mediainfo: MediaInfo) -> Optional[int]:
-        rows = []
-        try:
-            rows = DownloadHistoryOper().get_last_by(mtype=MediaType.TV.value, tmdbid=mediainfo.tmdb_id)
-        except Exception:
-            rows = []
-        if not rows and mediainfo.title and mediainfo.year:
-            try:
-                rows = DownloadHistoryOper().get_last_by(
-                    title=mediainfo.title,
-                    year=str(mediainfo.year),
-                    season=str(mediainfo.season) if mediainfo.season is not None else None
-                )
-            except Exception:
-                rows = []
-        if not rows:
-            return None
-
-        parsed_rows: List[datetime.datetime] = []
-        try:
-            for row in rows:
-                dt = self._parse_history_date(getattr(row, "date", None))
-                if dt:
-                    parsed_rows.append(dt)
-        except Exception:
-            parsed_rows = []
-        if not parsed_rows:
-            return None
-        latest_day = max(dt.date() for dt in parsed_rows)
-        earliest_on_latest_day = min(dt for dt in parsed_rows if dt.date() == latest_day)
-        return int(earliest_on_latest_day.hour * 60 + earliest_on_latest_day.minute)
-
-    @staticmethod
-    def _parse_history_date(raw_date: Optional[str]) -> Optional[datetime.datetime]:
-        raw = str(raw_date or "").strip()
-        if not raw:
-            return None
-        fmts = ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S")
-        for fmt in fmts:
-            try:
-                return datetime.datetime.strptime(raw, fmt)
-            except Exception:
-                continue
-        try:
-            return datetime.datetime.fromisoformat(raw.replace("Z", "+00:00")).replace(tzinfo=None)
-        except Exception:
-            return None
 
     def _next_track_time_by_interval(
             self,
