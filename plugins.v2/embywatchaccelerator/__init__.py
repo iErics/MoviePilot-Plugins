@@ -2,6 +2,7 @@ import datetime
 import re
 from threading import Lock
 from typing import Any, Dict, List, Optional, Tuple
+from zoneinfo import ZoneInfo
 
 from app.chain.download import DownloadChain
 from app.chain.search import SearchChain
@@ -26,7 +27,7 @@ class EmbyWatchAccelerator(_PluginBase):
     # 插件图标
     plugin_icon = "download.png"
     # 插件版本
-    plugin_version = "1.0.33"
+    plugin_version = "1.0.34"
     # 插件作者
     plugin_author = "codex"
     # 作者主页
@@ -60,6 +61,11 @@ class EmbyWatchAccelerator(_PluginBase):
     _candidate_pool_remove: str = ""
     _candidate_pool_pin_add: str = ""
     _candidate_pool_pin_remove: str = ""
+    _enable_airtime_gate: bool = True
+    _airtime_timezone: str = "Asia/Shanghai"
+    _airtime_buffer_minutes: int = 30
+    _airtime_fallback_hour: int = 20
+    _airtime_probe_interval_hours: int = 8
 
     def init_plugin(self, config: dict = None):
         # 停止现有任务
@@ -86,6 +92,11 @@ class EmbyWatchAccelerator(_PluginBase):
             self._candidate_pool_remove = (config.get("candidate_pool_remove") or "").strip()
             self._candidate_pool_pin_add = (config.get("candidate_pool_pin_add") or "").strip()
             self._candidate_pool_pin_remove = (config.get("candidate_pool_pin_remove") or "").strip()
+            self._enable_airtime_gate = bool(config.get("enable_airtime_gate", True))
+            self._airtime_timezone = str(config.get("airtime_timezone") or "Asia/Shanghai").strip() or "Asia/Shanghai"
+            self._airtime_buffer_minutes = int(config.get("airtime_buffer_minutes") or 30)
+            self._airtime_fallback_hour = int(config.get("airtime_fallback_hour") or 20)
+            self._airtime_probe_interval_hours = int(config.get("airtime_probe_interval_hours") or 8)
 
         config_changed = False
         if self._candidate_pool_clear or self._candidate_pool_remove or self._candidate_pool_pin_add or self._candidate_pool_pin_remove:
@@ -250,6 +261,31 @@ class EmbyWatchAccelerator(_PluginBase):
                                         "component": "VCol",
                                         "props": {"cols": 12, "md": 3},
                                         "content": [{"component": "VTextField", "props": {"model": "recent_added_limit", "label": "最近新增读取数量", "type": "number", "min": 1}}]
+                                    },
+                                    {
+                                        "component": "VCol",
+                                        "props": {"cols": 12, "md": 3},
+                                        "content": [{"component": "VSwitch", "props": {"model": "enable_airtime_gate", "label": "启用更新时间门控"}}]
+                                    },
+                                    {
+                                        "component": "VCol",
+                                        "props": {"cols": 12, "md": 3},
+                                        "content": [{"component": "VTextField", "props": {"model": "airtime_timezone", "label": "更新时间时区（IANA）"}}]
+                                    },
+                                    {
+                                        "component": "VCol",
+                                        "props": {"cols": 12, "md": 3},
+                                        "content": [{"component": "VTextField", "props": {"model": "airtime_buffer_minutes", "label": "更新时间缓冲（分钟）", "type": "number", "min": 0}}]
+                                    },
+                                    {
+                                        "component": "VCol",
+                                        "props": {"cols": 12, "md": 3},
+                                        "content": [{"component": "VTextField", "props": {"model": "airtime_fallback_hour", "label": "无精确时间默认小时", "type": "number", "min": 0, "max": 23}}]
+                                    },
+                                    {
+                                        "component": "VCol",
+                                        "props": {"cols": 12, "md": 3},
+                                        "content": [{"component": "VTextField", "props": {"model": "airtime_probe_interval_hours", "label": "无下一集信息兜底探测（小时）", "type": "number", "min": 1}}]
                                     }
                                 ]
                             }
@@ -362,6 +398,11 @@ class EmbyWatchAccelerator(_PluginBase):
             "recent_added_limit": 40,
             "resume_days": 30,
             "candidate_retention_days": 30,
+            "enable_airtime_gate": True,
+            "airtime_timezone": "Asia/Shanghai",
+            "airtime_buffer_minutes": 30,
+            "airtime_fallback_hour": 20,
+            "airtime_probe_interval_hours": 8,
             "user_whitelist": "",
             "user_blacklist": "",
             "library_blacklist": "",
@@ -480,9 +521,21 @@ class EmbyWatchAccelerator(_PluginBase):
 
     def _migrate_stats_user_alias(self, stats: Dict[str, Any]) -> bool:
         user_stats = stats.get("user_stats") or {}
-        if not isinstance(user_stats, dict) or "system" not in user_stats:
+        if not isinstance(user_stats, dict):
             return False
-        system_bucket = user_stats.pop("system") or {}
+        alias_keys = [k for k in list(user_stats.keys()) if self._normalize_user_label(k) == "最近入库" and k != "最近入库"]
+        if "system" in user_stats and "system" not in alias_keys:
+            alias_keys.append("system")
+        if not alias_keys:
+            return False
+        merged_source = {}
+        for key in alias_keys:
+            bucket = user_stats.pop(key, None) or {}
+            for k, v in bucket.items():
+                if k in ("track_items", "backfill_items"):
+                    merged_source[k] = (merged_source.get(k) or []) + (v or [])
+                else:
+                    merged_source[k] = int(merged_source.get(k) or 0) + int(v or 0)
         alias_key = "最近入库"
         existing = user_stats.get(alias_key) or {
             "resume_items": 0,
@@ -497,9 +550,9 @@ class EmbyWatchAccelerator(_PluginBase):
         }
         for key in ("resume_items", "series_items", "processed_series", "track_attempts",
                     "track_downloads", "backfill_attempts", "backfill_downloads"):
-            existing[key] = int(existing.get(key) or 0) + int(system_bucket.get(key) or 0)
-        existing["track_items"] = (existing.get("track_items") or []) + (system_bucket.get("track_items") or [])
-        existing["backfill_items"] = (existing.get("backfill_items") or []) + (system_bucket.get("backfill_items") or [])
+            existing[key] = int(existing.get(key) or 0) + int(merged_source.get(key) or 0)
+        existing["track_items"] = (existing.get("track_items") or []) + (merged_source.get("track_items") or [])
+        existing["backfill_items"] = (existing.get("backfill_items") or []) + (merged_source.get("backfill_items") or [])
         user_stats[alias_key] = existing
         stats["user_stats"] = user_stats
         return True
@@ -531,7 +584,7 @@ class EmbyWatchAccelerator(_PluginBase):
                             "component": "VListItemSubtitle",
                             "text": (
                                 f"SeriesId={item.get('series_id') or '-'} | "
-                                f"用户={item.get('user') or '-'} | "
+                                f"用户={self._normalize_user_label(item.get('user'))} | "
                                 f"分层={tier_text} | "
                                 f"最近入池={item.get('last_seen_at') or '-'} | "
                                 f"键={key}{pin_text}"
@@ -566,6 +619,11 @@ class EmbyWatchAccelerator(_PluginBase):
             "recent_added_limit": self._recent_added_limit,
             "resume_days": self._resume_days,
             "candidate_retention_days": self._candidate_retention_days,
+            "enable_airtime_gate": self._enable_airtime_gate,
+            "airtime_timezone": self._airtime_timezone,
+            "airtime_buffer_minutes": self._airtime_buffer_minutes,
+            "airtime_fallback_hour": self._airtime_fallback_hour,
+            "airtime_probe_interval_hours": self._airtime_probe_interval_hours,
             "user_whitelist": self._user_whitelist,
             "user_blacklist": self._user_blacklist,
             "library_blacklist": self._library_blacklist,
@@ -852,7 +910,7 @@ class EmbyWatchAccelerator(_PluginBase):
                             "content": [
                                 {
                                     "component": "VExpansionPanelTitle",
-                                    "text": f"展开查看更多（{len(sorted_items)} 条）"
+                                    "text": "展开查看更多"
                                 },
                                 {
                                     "component": "VExpansionPanelText",
@@ -892,6 +950,7 @@ class EmbyWatchAccelerator(_PluginBase):
             "backfill_attempts": 0,
             "backfill_downloads": 0,
             "backfill_skipped_stats_only": 0,
+            "skipped_airtime_gate": 0,
             "skipped_library_blacklist": 0,
             "skipped_non_tv": 0,
             "skipped_no_mediainfo": 0,
@@ -930,6 +989,7 @@ class EmbyWatchAccelerator(_PluginBase):
                 f"追更尝试/下载：{stats['accelerate_attempts']}/{stats['accelerate_downloads']}，"
                 f"补全尝试/下载：{stats['backfill_attempts']}/{stats['backfill_downloads']}，"
                 f"仅统计跳过补全：{stats['backfill_skipped_stats_only']}，"
+                f"更新时间门控跳过：{stats['skipped_airtime_gate']}，"
                 f"媒体库黑名单跳过：{stats['skipped_library_blacklist']}，"
                 f"跳过非电视剧：{stats['skipped_non_tv']}，"
                 f"跳过识别失败：{stats['skipped_no_mediainfo']}，"
@@ -942,6 +1002,7 @@ class EmbyWatchAccelerator(_PluginBase):
                 f"追更尝试/下载：{stats['accelerate_attempts']}/{stats['accelerate_downloads']}，"
                 f"补全尝试/下载：{stats['backfill_attempts']}/{stats['backfill_downloads']}，"
                 f"仅统计跳过补全：{stats['backfill_skipped_stats_only']}，"
+                f"更新时间门控跳过：{stats['skipped_airtime_gate']}，"
                 f"媒体库黑名单跳过：{stats['skipped_library_blacklist']}"
             )
             _lock.release()
@@ -1121,9 +1182,25 @@ class EmbyWatchAccelerator(_PluginBase):
                 logger.info(f"{mediainfo.title_year} 当前缺失均为未播集，跳过补全并进入追更策略")
 
             if mode == "accelerate":
+                allow_track, gate_reason = self._should_run_track_by_airtime_gate(
+                    mediainfo=mediainfo,
+                    candidate_item=candidate_pool.get(candidate_key) or {}
+                )
+                if not allow_track:
+                    stats["skipped_airtime_gate"] += 1
+                    logger.info(f"{mediainfo.title_year} 追更跳过：{gate_reason}")
+                    continue
                 logger.info(f"{mediainfo.title_year} 状态：{status_text}，执行追更更新（缓存匹配）")
                 stats["accelerate_attempts"] += 1
                 user_bucket["track_attempts"] += 1
+                now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                candidate_entry = candidate_pool.get(candidate_key) or {}
+                candidate_entry["last_track_at"] = now_str
+                next_ep = mediainfo.next_episode_to_air or {}
+                candidate_entry["last_track_next_episode"] = (
+                    f"{next_ep.get('season_number') or '-'}:{next_ep.get('episode_number') or '-'}:{next_ep.get('air_date') or '-'}"
+                )
+                candidate_pool[candidate_key] = candidate_entry
                 if self._accelerate_series(search_chain, download_chain, mediainfo, meta, current_season):
                     stats["accelerate_downloads"] += 1
                     user_bucket["track_downloads"] += 1
@@ -1157,7 +1234,20 @@ class EmbyWatchAccelerator(_PluginBase):
         server_key = (server_name or "default").strip() or "default"
         server_pool = all_servers.get(server_key) or {}
         if isinstance(server_pool, dict):
-            return dict(server_pool)
+            normalized = dict(server_pool)
+            changed = False
+            for key, item in normalized.items():
+                if not isinstance(item, dict):
+                    continue
+                normalized_user = self._normalize_user_label(item.get("user"))
+                if normalized_user != item.get("user"):
+                    item["user"] = normalized_user
+                    normalized[key] = item
+                    changed = True
+            if changed:
+                all_servers[server_key] = normalized
+                self.save_data(self._candidate_pool_storage_key(), all_servers)
+            return normalized
         return {}
 
     def _save_candidate_pool(self, server_name: str, candidate_pool: Dict[str, Dict[str, Any]]) -> None:
@@ -1221,15 +1311,20 @@ class EmbyWatchAccelerator(_PluginBase):
             if not series_id or season is None:
                 continue
             key = self._candidate_key(series_id=series_id, season=season)
+            existing = candidate_pool.get(key) or {}
             candidate_pool[key] = {
                 "series_id": series_id,
-                "series_name": item.get("series_name"),
+                "series_name": item.get("series_name") or existing.get("series_name"),
                 "season": int(season),
-                "episode": item.get("episode"),
-                "user": item.get("user"),
-                "last_played": (item.get("last_played") or datetime.datetime.min).isoformat(),
-                "playback_ticks": int(item.get("playback_ticks") or 0),
-                "last_seen_at": now
+                "episode": item.get("episode") or existing.get("episode"),
+                "user": self._normalize_user_label(item.get("user") or existing.get("user")),
+                "last_played": (item.get("last_played") or datetime.datetime.min).isoformat()
+                if not existing.get("last_played") else existing.get("last_played"),
+                "playback_ticks": int(item.get("playback_ticks") or existing.get("playback_ticks") or 0),
+                "last_seen_at": now,
+                "last_track_at": existing.get("last_track_at"),
+                "last_track_next_episode": existing.get("last_track_next_episode"),
+                "pinned": bool(existing.get("pinned"))
             }
 
     def _upsert_candidate_pool_from_history(
@@ -1249,10 +1344,13 @@ class EmbyWatchAccelerator(_PluginBase):
                 "series_name": item.get("series_name") or existing.get("series_name"),
                 "season": int(season),
                 "episode": existing.get("episode") or item.get("episode"),
-                "user": existing.get("user") or item.get("user"),
+                "user": self._normalize_user_label(existing.get("user") or item.get("user")),
                 "last_played": existing.get("last_played") or (item.get("last_played") or datetime.datetime.min).isoformat(),
                 "playback_ticks": int(existing.get("playback_ticks") or item.get("playback_ticks") or 0),
-                "last_seen_at": now
+                "last_seen_at": now,
+                "last_track_at": existing.get("last_track_at"),
+                "last_track_next_episode": existing.get("last_track_next_episode"),
+                "pinned": bool(existing.get("pinned"))
             }
 
     def _upsert_candidate_pool_from_recent_added(
@@ -1272,10 +1370,13 @@ class EmbyWatchAccelerator(_PluginBase):
                 "series_name": item.get("series_name") or existing.get("series_name"),
                 "season": int(season),
                 "episode": existing.get("episode") or item.get("episode"),
-                "user": existing.get("user") or item.get("user"),
+                "user": self._normalize_user_label(existing.get("user") or item.get("user")),
                 "last_played": existing.get("last_played") or (item.get("last_played") or datetime.datetime.min).isoformat(),
                 "playback_ticks": int(existing.get("playback_ticks") or item.get("playback_ticks") or 0),
-                "last_seen_at": now
+                "last_seen_at": now,
+                "last_track_at": existing.get("last_track_at"),
+                "last_track_next_episode": existing.get("last_track_next_episode"),
+                "pinned": bool(existing.get("pinned"))
             }
 
     @staticmethod
@@ -1293,7 +1394,7 @@ class EmbyWatchAccelerator(_PluginBase):
                 "episode": item.get("episode"),
                 "last_played": datetime.datetime.min,
                 "playback_ticks": int(item.get("playback_ticks") or 0),
-                "user": item.get("user"),
+                "user": EmbyWatchAccelerator._normalize_user_label(item.get("user")),
                 "last_seen_at": item.get("last_seen_at"),
                 "pinned": bool(item.get("pinned")),
                 "_source": "candidate_pool"
@@ -1990,6 +2091,107 @@ class EmbyWatchAccelerator(_PluginBase):
             return int(episode_number) if episode_number is not None else None
         except Exception:
             return None
+
+    def _should_run_track_by_airtime_gate(
+            self,
+            mediainfo: MediaInfo,
+            candidate_item: Dict[str, Any]) -> Tuple[bool, str]:
+        if not self._enable_airtime_gate:
+            return True, "airtime_gate_disabled"
+
+        next_ep = mediainfo.next_episode_to_air or {}
+        next_key = f"{next_ep.get('season_number') or '-'}:{next_ep.get('episode_number') or '-'}:{next_ep.get('air_date') or '-'}"
+        due_at_utc, due_note = self._resolve_next_episode_due_at_utc(mediainfo)
+        now_utc = datetime.datetime.now(datetime.timezone.utc)
+        last_track_utc = self._parse_track_time_utc(candidate_item.get("last_track_at"))
+        last_track_key = str(candidate_item.get("last_track_next_episode") or "").strip()
+
+        if due_at_utc:
+            if now_utc < due_at_utc:
+                return False, f"未到更新时间窗口，预计执行时间={self._format_dt_in_tz(due_at_utc)}，依据={due_note}"
+            if last_track_utc and last_track_key == next_key and last_track_utc >= due_at_utc:
+                return False, f"当前更新时间窗口已追更，最后追更时间={self._format_dt_in_tz(last_track_utc)}"
+            return True, f"已到更新时间窗口，预计执行时间={self._format_dt_in_tz(due_at_utc)}，依据={due_note}"
+
+        probe_hours = max(int(self._airtime_probe_interval_hours or 8), 1)
+        if last_track_utc and (now_utc - last_track_utc) < datetime.timedelta(hours=probe_hours):
+            remain = datetime.timedelta(hours=probe_hours) - (now_utc - last_track_utc)
+            remain_min = max(int(remain.total_seconds() // 60), 0)
+            return False, f"无下一集时间，兜底探测未到窗口（剩余约{remain_min}分钟）"
+        return True, "无下一集时间，走兜底探测"
+
+    def _resolve_next_episode_due_at_utc(self, mediainfo: MediaInfo) -> Tuple[Optional[datetime.datetime], str]:
+        next_ep = mediainfo.next_episode_to_air or {}
+        if not isinstance(next_ep, dict):
+            return None, "next_episode_missing"
+        raw_air_date = str(next_ep.get("air_date") or "").strip()
+        if not raw_air_date:
+            return None, "next_episode_air_date_missing"
+
+        tz = self._resolve_airtime_tz()
+        parsed_dt: Optional[datetime.datetime] = None
+        air_date_note = "tmdb_air_date_only"
+        try:
+            iso_raw = raw_air_date.replace("Z", "+00:00")
+            parsed_dt = datetime.datetime.fromisoformat(iso_raw)
+            if parsed_dt.tzinfo:
+                parsed_dt = parsed_dt.astimezone(datetime.timezone.utc)
+                air_date_note = "tmdb_air_datetime"
+            else:
+                parsed_dt = parsed_dt.replace(
+                    hour=max(min(int(self._airtime_fallback_hour), 23), 0),
+                    minute=0,
+                    second=0,
+                    microsecond=0,
+                    tzinfo=tz
+                ).astimezone(datetime.timezone.utc)
+        except Exception:
+            try:
+                date_only = datetime.datetime.strptime(raw_air_date[:10], "%Y-%m-%d")
+                parsed_dt = date_only.replace(
+                    hour=max(min(int(self._airtime_fallback_hour), 23), 0),
+                    minute=0,
+                    second=0,
+                    microsecond=0,
+                    tzinfo=tz
+                ).astimezone(datetime.timezone.utc)
+                air_date_note = "tmdb_air_date_fallback_hour"
+            except Exception:
+                return None, "tmdb_air_date_parse_failed"
+
+        due_at_utc = parsed_dt + datetime.timedelta(minutes=max(int(self._airtime_buffer_minutes or 0), 0))
+        return due_at_utc, f"{air_date_note}+buffer({self._airtime_buffer_minutes}m)"
+
+    def _resolve_airtime_tz(self):
+        tz_name = str(self._airtime_timezone or "Asia/Shanghai").strip() or "Asia/Shanghai"
+        try:
+            return ZoneInfo(tz_name)
+        except Exception:
+            return ZoneInfo("Asia/Shanghai")
+
+    @staticmethod
+    def _parse_track_time_utc(raw_time: Optional[str]) -> Optional[datetime.datetime]:
+        raw = str(raw_time or "").strip()
+        if not raw:
+            return None
+        try:
+            parsed = datetime.datetime.fromisoformat(raw.replace("Z", "+00:00"))
+            if parsed.tzinfo:
+                return parsed.astimezone(datetime.timezone.utc)
+            return parsed.replace(tzinfo=datetime.timezone.utc)
+        except Exception:
+            try:
+                parsed = datetime.datetime.strptime(raw, "%Y-%m-%d %H:%M:%S")
+                return parsed.replace(tzinfo=datetime.timezone.utc)
+            except Exception:
+                return None
+
+    def _format_dt_in_tz(self, dt_utc: datetime.datetime) -> str:
+        try:
+            tz = self._resolve_airtime_tz()
+            return dt_utc.astimezone(tz).strftime("%Y-%m-%d %H:%M:%S")
+        except Exception:
+            return dt_utc.strftime("%Y-%m-%d %H:%M:%S")
 
     def _trim_no_exists_for_current_airing(
             self,
