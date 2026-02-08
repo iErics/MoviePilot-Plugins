@@ -26,7 +26,7 @@ class EmbyWatchAccelerator(_PluginBase):
     # 插件图标
     plugin_icon = "download.png"
     # 插件版本
-    plugin_version = "1.0.31"
+    plugin_version = "1.0.32"
     # 插件作者
     plugin_author = "codex"
     # 作者主页
@@ -375,6 +375,8 @@ class EmbyWatchAccelerator(_PluginBase):
 
     def get_page(self) -> Optional[List[dict]]:
         stats = self.get_data("last_stats") or {}
+        if self._migrate_stats_user_alias(stats):
+            self.save_data("last_stats", stats)
         if self._hydrate_stats_posters(stats):
             self.save_data("last_stats", stats)
         user_stats = stats.get("user_stats") or {}
@@ -462,6 +464,41 @@ class EmbyWatchAccelerator(_PluginBase):
                 "content": [{"component": "VCardText", "text": "暂无用户数据"}]
             }
         ] + self._build_candidate_pool_page()
+
+    @staticmethod
+    def _normalize_user_label(user_name: Optional[str]) -> str:
+        raw = str(user_name or "").strip()
+        if not raw:
+            return "未知用户"
+        if raw.lower() == "system":
+            return "最近入库"
+        return raw
+
+    def _migrate_stats_user_alias(self, stats: Dict[str, Any]) -> bool:
+        user_stats = stats.get("user_stats") or {}
+        if not isinstance(user_stats, dict) or "system" not in user_stats:
+            return False
+        system_bucket = user_stats.pop("system") or {}
+        alias_key = "最近入库"
+        existing = user_stats.get(alias_key) or {
+            "resume_items": 0,
+            "series_items": 0,
+            "processed_series": 0,
+            "track_attempts": 0,
+            "track_downloads": 0,
+            "backfill_attempts": 0,
+            "backfill_downloads": 0,
+            "track_items": [],
+            "backfill_items": []
+        }
+        for key in ("resume_items", "series_items", "processed_series", "track_attempts",
+                    "track_downloads", "backfill_attempts", "backfill_downloads"):
+            existing[key] = int(existing.get(key) or 0) + int(system_bucket.get(key) or 0)
+        existing["track_items"] = (existing.get("track_items") or []) + (system_bucket.get("track_items") or [])
+        existing["backfill_items"] = (existing.get("backfill_items") or []) + (system_bucket.get("backfill_items") or [])
+        user_stats[alias_key] = existing
+        stats["user_stats"] = user_stats
+        return True
 
     def _build_candidate_pool_page(self) -> List[dict]:
         all_servers = self.get_data(self._candidate_pool_storage_key()) or {}
@@ -565,7 +602,7 @@ class EmbyWatchAccelerator(_PluginBase):
 
     @staticmethod
     def _get_user_bucket(stats: Dict[str, Any], user_name: Optional[str]) -> Dict[str, Any]:
-        user_key = user_name or "未知用户"
+        user_key = EmbyWatchAccelerator._normalize_user_label(user_name)
         user_stats = stats.setdefault("user_stats", {})
         bucket = user_stats.get(user_key)
         if bucket:
@@ -688,16 +725,19 @@ class EmbyWatchAccelerator(_PluginBase):
         return changed
 
     @staticmethod
-    def _build_user_mode_block(title: str, attempts: int, downloads: int, items: List[Dict[str, Any]]) -> List[dict]:
-        placeholder_poster = (
-            "data:image/svg+xml;utf8,"
-            "<svg xmlns='http://www.w3.org/2000/svg' width='240' height='360' viewBox='0 0 240 360'>"
-            "<rect width='240' height='360' fill='%23eceff1'/>"
-            "<text x='120' y='178' text-anchor='middle' fill='%2390a4ae' font-size='20'>No Cover</text>"
-            "</svg>"
-        )
+    def _parse_stat_item_time(item: Dict[str, Any]) -> datetime.datetime:
+        raw = str(item.get("time") or "").strip()
+        if not raw:
+            return datetime.datetime.min
+        try:
+            return datetime.datetime.strptime(raw, "%Y-%m-%d %H:%M:%S")
+        except Exception:
+            return datetime.datetime.min
+
+    @staticmethod
+    def _build_stat_cards(items: List[Dict[str, Any]], placeholder_poster: str) -> List[dict]:
         cards = []
-        for item in (items[-12:] if items else []):
+        for item in (items or []):
             cards.append({
                 "component": "VCol",
                 "props": {"cols": 12, "sm": 6, "md": 4, "lg": 3, "class": "px-2 pb-4"},
@@ -757,6 +797,20 @@ class EmbyWatchAccelerator(_PluginBase):
                     }
                 ]
             })
+        return cards
+
+    def _build_user_mode_block(self, title: str, attempts: int, downloads: int, items: List[Dict[str, Any]]) -> List[dict]:
+        placeholder_poster = (
+            "data:image/svg+xml;utf8,"
+            "<svg xmlns='http://www.w3.org/2000/svg' width='240' height='360' viewBox='0 0 240 360'>"
+            "<rect width='240' height='360' fill='%23eceff1'/>"
+            "<text x='120' y='178' text-anchor='middle' fill='%2390a4ae' font-size='20'>No Cover</text>"
+            "</svg>"
+        )
+        sorted_items = sorted(items or [], key=self._parse_stat_item_time, reverse=True)
+        preview_items = sorted_items[:12]
+        preview_cards = self._build_stat_cards(preview_items, placeholder_poster)
+        all_cards = self._build_stat_cards(sorted_items, placeholder_poster)
 
         content = [
             {
@@ -781,8 +835,30 @@ class EmbyWatchAccelerator(_PluginBase):
                 ]
             }
         ]
-        if cards:
-            content.append({"component": "VRow", "props": {"class": "ma-0"}, "content": cards})
+        if preview_cards:
+            content.append({"component": "VRow", "props": {"class": "ma-0"}, "content": preview_cards})
+            if len(sorted_items) > 12:
+                content.append({
+                    "component": "VExpansionPanels",
+                    "props": {"variant": "accordion", "class": "mt-1"},
+                    "content": [
+                        {
+                            "component": "VExpansionPanel",
+                            "content": [
+                                {
+                                    "component": "VExpansionPanelTitle",
+                                    "text": f"展开查看全部（{len(sorted_items)} 条）"
+                                },
+                                {
+                                    "component": "VExpansionPanelText",
+                                    "content": [
+                                        {"component": "VRow", "props": {"class": "ma-0 pt-2"}, "content": all_cards}
+                                    ]
+                                }
+                            ]
+                        }
+                    ]
+                })
         else:
             content.append({"component": "VCardText", "props": {"class": "pa-0 mt-4"}, "text": "暂无记录"})
         return content
