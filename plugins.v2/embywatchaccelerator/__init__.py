@@ -27,7 +27,7 @@ class EmbyWatchAccelerator(_PluginBase):
     # 插件图标
     plugin_icon = "download.png"
     # 插件版本
-    plugin_version = "1.0.38"
+    plugin_version = "1.0.39"
     # 插件作者
     plugin_author = "codex"
     # 作者主页
@@ -1289,7 +1289,7 @@ class EmbyWatchAccelerator(_PluginBase):
                 logger.info(f"{mediainfo.title_year} 状态：{status_text}，执行追更更新（缓存匹配）")
                 stats["accelerate_attempts"] += 1
                 user_bucket["track_attempts"] += 1
-                now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                now_str = datetime.datetime.now(self._resolve_airtime_tz()).isoformat()
                 candidate_entry = candidate_pool.get(candidate_key) or {}
                 candidate_entry["last_track_at"] = now_str
                 candidate_entry["last_track_next_episode"] = (
@@ -2319,8 +2319,7 @@ class EmbyWatchAccelerator(_PluginBase):
         except Exception:
             return ZoneInfo("Asia/Shanghai")
 
-    @staticmethod
-    def _parse_track_time_utc(raw_time: Optional[str]) -> Optional[datetime.datetime]:
+    def _parse_track_time_utc(self, raw_time: Optional[str]) -> Optional[datetime.datetime]:
         raw = str(raw_time or "").strip()
         if not raw:
             return None
@@ -2328,11 +2327,14 @@ class EmbyWatchAccelerator(_PluginBase):
             parsed = datetime.datetime.fromisoformat(raw.replace("Z", "+00:00"))
             if parsed.tzinfo:
                 return parsed.astimezone(datetime.timezone.utc)
-            return parsed.replace(tzinfo=datetime.timezone.utc)
+            # 兼容旧数据：无时区时间按配置时区解析再转UTC，避免+8小时偏移
+            local_tz = self._resolve_airtime_tz()
+            return parsed.replace(tzinfo=local_tz).astimezone(datetime.timezone.utc)
         except Exception:
             try:
                 parsed = datetime.datetime.strptime(raw, "%Y-%m-%d %H:%M:%S")
-                return parsed.replace(tzinfo=datetime.timezone.utc)
+                local_tz = self._resolve_airtime_tz()
+                return parsed.replace(tzinfo=local_tz).astimezone(datetime.timezone.utc)
             except Exception:
                 return None
 
