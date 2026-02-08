@@ -27,7 +27,7 @@ class EmbyWatchAccelerator(_PluginBase):
     # 插件图标
     plugin_icon = "download.png"
     # 插件版本
-    plugin_version = "1.0.34"
+    plugin_version = "1.0.35"
     # 插件作者
     plugin_author = "codex"
     # 作者主页
@@ -416,9 +416,16 @@ class EmbyWatchAccelerator(_PluginBase):
 
     def get_page(self) -> Optional[List[dict]]:
         stats = self.get_data("last_stats") or {}
+        changed = False
         if self._migrate_stats_user_alias(stats):
-            self.save_data("last_stats", stats)
+            changed = True
+        if self._merge_candidate_pool_into_stats(stats):
+            changed = True
+        if self._migrate_stats_user_alias(stats):
+            changed = True
         if self._hydrate_stats_posters(stats):
+            changed = True
+        if changed:
             self.save_data("last_stats", stats)
         user_stats = stats.get("user_stats") or {}
         user_cards = []
@@ -556,6 +563,61 @@ class EmbyWatchAccelerator(_PluginBase):
         user_stats[alias_key] = existing
         stats["user_stats"] = user_stats
         return True
+
+    def _merge_candidate_pool_into_stats(self, stats: Dict[str, Any]) -> bool:
+        all_servers = self.get_data(self._candidate_pool_storage_key()) or {}
+        if not isinstance(all_servers, dict) or not all_servers:
+            return False
+        changed = False
+        user_stats = stats.setdefault("user_stats", {})
+        for server_name, pool in all_servers.items():
+            if not isinstance(pool, dict) or not pool:
+                continue
+            for _, item in pool.items():
+                if not isinstance(item, dict):
+                    continue
+                series_id = str(item.get("series_id") or "").strip()
+                season = item.get("season")
+                if not series_id or season is None:
+                    continue
+                user_name = self._normalize_user_label(item.get("user"))
+                bucket = self._get_user_bucket(stats, user_name)
+                track_items = bucket.setdefault("track_items", [])
+                key = f"{server_name}:{series_id}:{int(season)}"
+                idx = None
+                for i, exist in enumerate(track_items):
+                    exist_key = f"{exist.get('server') or ''}:{exist.get('series_id') or ''}:{int(exist.get('season') or 0)}"
+                    if exist_key == key:
+                        idx = i
+                        break
+                next_time = self._candidate_next_track_time(item)
+                row = {
+                    "title": item.get("series_name") or item.get("title") or "未知剧集",
+                    "year": item.get("year"),
+                    "season": int(season),
+                    "result": item.get("last_track_result") or "候选池",
+                    "poster": item.get("poster") or "",
+                    "poster_source": item.get("poster_source") or "candidate_pool",
+                    "series_id": series_id,
+                    "server": server_name,
+                    "type": item.get("type") or "电视剧",
+                    "time": next_time
+                }
+                if idx is None:
+                    track_items.append(row)
+                    changed = True
+                else:
+                    old = track_items[idx]
+                    merged = dict(old)
+                    merged.update({k: v for k, v in row.items() if v not in (None, "")})
+                    merged["time"] = next_time
+                    if merged != old:
+                        track_items[idx] = merged
+                        changed = True
+                # 确保用户别名统一
+                if user_name not in user_stats and self._normalize_user_label(user_name) == "最近入库":
+                    changed = True
+        return changed
 
     def _build_candidate_pool_page(self) -> List[dict]:
         all_servers = self.get_data(self._candidate_pool_storage_key()) or {}
@@ -1106,6 +1168,23 @@ class EmbyWatchAccelerator(_PluginBase):
                 no_exists=actionable_no_exists
             )
             status_text = "已完结" if is_ended else "更新中"
+            next_ep = mediainfo.next_episode_to_air or {}
+            due_at_utc, _ = self._resolve_next_episode_due_at_utc(mediainfo)
+            candidate_entry = candidate_pool.get(candidate_key) or {}
+            candidate_entry["series_name"] = mediainfo.title
+            candidate_entry["title"] = mediainfo.title
+            candidate_entry["year"] = mediainfo.year
+            candidate_entry["type"] = str(getattr(mediainfo.type, "value", mediainfo.type) or "电视剧")
+            poster, poster_source = self._resolve_poster_url(mediainfo=mediainfo, emby=emby, series_id=series_id)
+            if poster:
+                candidate_entry["poster"] = poster
+                candidate_entry["poster_source"] = poster_source
+            candidate_entry["user"] = self._normalize_user_label(current_user)
+            candidate_entry["next_episode_air_date"] = next_ep.get("air_date")
+            candidate_entry["next_episode_season"] = next_ep.get("season_number")
+            candidate_entry["next_episode_number"] = next_ep.get("episode_number")
+            candidate_entry["next_track_at"] = due_at_utc.isoformat() if due_at_utc else ""
+            candidate_pool[candidate_key] = candidate_entry
             logger.info(
                 f"{mediainfo.title_year} 状态判定：TMDB={mediainfo.status or '-'}，"
                 f"next_season={self._next_episode_season(mediainfo) or '-'}，"
@@ -1188,6 +1267,9 @@ class EmbyWatchAccelerator(_PluginBase):
                 )
                 if not allow_track:
                     stats["skipped_airtime_gate"] += 1
+                    candidate_entry = candidate_pool.get(candidate_key) or {}
+                    candidate_entry["last_track_result"] = f"门控跳过：{gate_reason}"
+                    candidate_pool[candidate_key] = candidate_entry
                     logger.info(f"{mediainfo.title_year} 追更跳过：{gate_reason}")
                     continue
                 logger.info(f"{mediainfo.title_year} 状态：{status_text}，执行追更更新（缓存匹配）")
@@ -1196,7 +1278,6 @@ class EmbyWatchAccelerator(_PluginBase):
                 now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 candidate_entry = candidate_pool.get(candidate_key) or {}
                 candidate_entry["last_track_at"] = now_str
-                next_ep = mediainfo.next_episode_to_air or {}
                 candidate_entry["last_track_next_episode"] = (
                     f"{next_ep.get('season_number') or '-'}:{next_ep.get('episode_number') or '-'}:{next_ep.get('air_date') or '-'}"
                 )
@@ -1209,12 +1290,18 @@ class EmbyWatchAccelerator(_PluginBase):
                         mediainfo=mediainfo, season=current_season, result="已下载",
                         series_id=series_id, server_name=server_name, emby=emby
                     )
+                    candidate_entry = candidate_pool.get(candidate_key) or {}
+                    candidate_entry["last_track_result"] = "已下载"
+                    candidate_pool[candidate_key] = candidate_entry
                 else:
                     self._append_user_media_result(
                         stats=stats, user_name=current_user, kind="track",
                         mediainfo=mediainfo, season=current_season, result="未命中资源",
                         series_id=series_id, server_name=server_name, emby=emby
                     )
+                    candidate_entry = candidate_pool.get(candidate_key) or {}
+                    candidate_entry["last_track_result"] = "未命中资源"
+                    candidate_pool[candidate_key] = candidate_entry
         self._save_candidate_pool(server_name=server_name, candidate_pool=candidate_pool)
 
     @staticmethod
@@ -2159,7 +2246,7 @@ class EmbyWatchAccelerator(_PluginBase):
             except Exception:
                 return None, "tmdb_air_date_parse_failed"
 
-        due_at_utc = parsed_dt + datetime.timedelta(minutes=max(int(self._airtime_buffer_minutes or 0), 0))
+        due_at_utc = parsed_dt + datetime.timedelta(minutes=int(self._airtime_buffer_minutes or 0))
         return due_at_utc, f"{air_date_note}+buffer({self._airtime_buffer_minutes}m)"
 
     def _resolve_airtime_tz(self):
@@ -2192,6 +2279,29 @@ class EmbyWatchAccelerator(_PluginBase):
             return dt_utc.astimezone(tz).strftime("%Y-%m-%d %H:%M:%S")
         except Exception:
             return dt_utc.strftime("%Y-%m-%d %H:%M:%S")
+
+    def _candidate_next_track_time(self, candidate_item: Dict[str, Any]) -> str:
+        next_track_at = self._parse_track_time_utc(candidate_item.get("next_track_at"))
+        if next_track_at:
+            return self._format_dt_in_tz(next_track_at)
+        if not self._enable_airtime_gate:
+            return "-"
+        next_air = str(candidate_item.get("next_episode_air_date") or "").strip()
+        if next_air:
+            mediainfo = MediaInfo()
+            mediainfo.next_episode_to_air = {
+                "air_date": next_air,
+                "season_number": candidate_item.get("next_episode_season"),
+                "episode_number": candidate_item.get("next_episode_number")
+            }
+            due_at, _ = self._resolve_next_episode_due_at_utc(mediainfo)
+            if due_at:
+                return self._format_dt_in_tz(due_at)
+        last_track_utc = self._parse_track_time_utc(candidate_item.get("last_track_at"))
+        if last_track_utc:
+            probe_hours = max(int(self._airtime_probe_interval_hours or 8), 1)
+            return self._format_dt_in_tz(last_track_utc + datetime.timedelta(hours=probe_hours))
+        return "-"
 
     def _trim_no_exists_for_current_airing(
             self,
