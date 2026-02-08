@@ -15,6 +15,7 @@ from app.log import logger
 from app.plugins import _PluginBase
 from app.schemas import NotExistMediaInfo
 from app.schemas.types import MediaType
+from app.db.downloadhistory_oper import DownloadHistoryOper
 
 _lock = Lock()
 
@@ -27,7 +28,7 @@ class EmbyWatchAccelerator(_PluginBase):
     # 插件图标
     plugin_icon = "download.png"
     # 插件版本
-    plugin_version = "1.0.36"
+    plugin_version = "1.0.37"
     # 插件作者
     plugin_author = "codex"
     # 作者主页
@@ -1178,8 +1179,8 @@ class EmbyWatchAccelerator(_PluginBase):
             )
             status_text = "已完结" if is_ended else "更新中"
             next_ep = mediainfo.next_episode_to_air or {}
-            due_at_utc, _ = self._resolve_next_episode_due_at_utc(mediainfo)
             candidate_entry = candidate_pool.get(candidate_key) or {}
+            due_at_utc, _ = self._resolve_next_episode_due_at_utc(mediainfo, candidate_entry)
             candidate_entry["series_name"] = mediainfo.title
             candidate_entry["title"] = mediainfo.title
             candidate_entry["year"] = mediainfo.year
@@ -1270,10 +1271,15 @@ class EmbyWatchAccelerator(_PluginBase):
                 logger.info(f"{mediainfo.title_year} 当前缺失均为未播集，跳过补全并进入追更策略")
 
             if mode == "accelerate":
-                allow_track, gate_reason = self._should_run_track_by_airtime_gate(
+                allow_track, gate_reason, next_track_at_utc = self._should_run_track_by_airtime_gate(
                     mediainfo=mediainfo,
-                    candidate_item=candidate_pool.get(candidate_key) or {}
+                    candidate_item=candidate_pool.get(candidate_key) or {},
+                    tier=tier
                 )
+                candidate_entry = candidate_pool.get(candidate_key) or {}
+                candidate_entry["next_track_at"] = next_track_at_utc.isoformat() if next_track_at_utc else ""
+                candidate_entry["default_interval_minutes"] = self._tier_interval_minutes(tier=tier)
+                candidate_pool[candidate_key] = candidate_entry
                 if not allow_track:
                     stats["skipped_airtime_gate"] += 1
                     candidate_entry = candidate_pool.get(candidate_key) or {}
@@ -1294,6 +1300,7 @@ class EmbyWatchAccelerator(_PluginBase):
                 if self._accelerate_series(search_chain, download_chain, mediainfo, meta, current_season):
                     stats["accelerate_downloads"] += 1
                     user_bucket["track_downloads"] += 1
+                    self._update_learned_hit_minutes(candidate_entry)
                     self._append_user_media_result(
                         stats=stats, user_name=current_user, kind="track",
                         mediainfo=mediainfo, season=current_season, result="已下载",
@@ -2191,32 +2198,48 @@ class EmbyWatchAccelerator(_PluginBase):
     def _should_run_track_by_airtime_gate(
             self,
             mediainfo: MediaInfo,
-            candidate_item: Dict[str, Any]) -> Tuple[bool, str]:
-        if not self._enable_airtime_gate:
-            return True, "airtime_gate_disabled"
-
+            candidate_item: Dict[str, Any],
+            tier: Optional[str]) -> Tuple[bool, str, Optional[datetime.datetime]]:
+        now_utc = datetime.datetime.now(datetime.timezone.utc)
         next_ep = mediainfo.next_episode_to_air or {}
         next_key = f"{next_ep.get('season_number') or '-'}:{next_ep.get('episode_number') or '-'}:{next_ep.get('air_date') or '-'}"
-        due_at_utc, due_note = self._resolve_next_episode_due_at_utc(mediainfo)
-        now_utc = datetime.datetime.now(datetime.timezone.utc)
         last_track_utc = self._parse_track_time_utc(candidate_item.get("last_track_at"))
         last_track_key = str(candidate_item.get("last_track_next_episode") or "").strip()
 
+        if not self._enable_airtime_gate:
+            next_by_interval = self._next_track_time_by_interval(last_track_utc, tier)
+            if next_by_interval and now_utc < next_by_interval:
+                return False, f"未到默认间隔窗口，预计执行时间={self._format_dt_in_tz(next_by_interval)}", next_by_interval
+            return True, "airtime_gate_disabled", next_by_interval
+
+        due_at_utc, due_note = self._resolve_next_episode_due_at_utc(
+            mediainfo=mediainfo,
+            candidate_item=candidate_item
+        )
         if due_at_utc:
             if now_utc < due_at_utc:
-                return False, f"未到更新时间窗口，预计执行时间={self._format_dt_in_tz(due_at_utc)}，依据={due_note}"
+                return False, f"未到更新时间窗口，预计执行时间={self._format_dt_in_tz(due_at_utc)}，依据={due_note}", due_at_utc
+            if "default_day_start" in due_note:
+                next_by_interval = self._next_track_time_by_interval(last_track_utc, tier)
+                if next_by_interval and now_utc < next_by_interval:
+                    return False, (
+                        f"未到默认间隔窗口，预计执行时间={self._format_dt_in_tz(next_by_interval)}，依据={due_note}"
+                    ), next_by_interval
+                return True, f"当日按默认间隔执行追更，依据={due_note}", next_by_interval
             if last_track_utc and last_track_key == next_key and last_track_utc >= due_at_utc:
-                return False, f"当前更新时间窗口已追更，最后追更时间={self._format_dt_in_tz(last_track_utc)}"
-            return True, f"已到更新时间窗口，预计执行时间={self._format_dt_in_tz(due_at_utc)}，依据={due_note}"
+                return False, f"当前更新时间窗口已追更，最后追更时间={self._format_dt_in_tz(last_track_utc)}", due_at_utc
+            return True, f"已到更新时间窗口，预计执行时间={self._format_dt_in_tz(due_at_utc)}，依据={due_note}", due_at_utc
 
-        probe_hours = max(int(self._airtime_probe_interval_hours or 8), 1)
-        if last_track_utc and (now_utc - last_track_utc) < datetime.timedelta(hours=probe_hours):
-            remain = datetime.timedelta(hours=probe_hours) - (now_utc - last_track_utc)
-            remain_min = max(int(remain.total_seconds() // 60), 0)
-            return False, f"无下一集时间，兜底探测未到窗口（剩余约{remain_min}分钟）"
-        return True, "无下一集时间，走兜底探测"
+        # 未获取下一集日期时，回退到默认追更间隔，不做轻量探测。
+        next_by_interval = self._next_track_time_by_interval(last_track_utc, tier)
+        if next_by_interval and now_utc < next_by_interval:
+            return False, f"无下一集日期，未到默认间隔窗口，预计执行时间={self._format_dt_in_tz(next_by_interval)}", next_by_interval
+        return True, "无下一集日期，按默认间隔执行追更", next_by_interval
 
-    def _resolve_next_episode_due_at_utc(self, mediainfo: MediaInfo) -> Tuple[Optional[datetime.datetime], str]:
+    def _resolve_next_episode_due_at_utc(
+            self,
+            mediainfo: MediaInfo,
+            candidate_item: Dict[str, Any]) -> Tuple[Optional[datetime.datetime], str]:
         next_ep = mediainfo.next_episode_to_air or {}
         if not isinstance(next_ep, dict):
             return None, "next_episode_missing"
@@ -2225,38 +2248,123 @@ class EmbyWatchAccelerator(_PluginBase):
             return None, "next_episode_air_date_missing"
 
         tz = self._resolve_airtime_tz()
-        parsed_dt: Optional[datetime.datetime] = None
-        air_date_note = "tmdb_air_date_only"
+        date_part = raw_air_date[:10]
         try:
-            iso_raw = raw_air_date.replace("Z", "+00:00")
-            parsed_dt = datetime.datetime.fromisoformat(iso_raw)
-            if parsed_dt.tzinfo:
-                parsed_dt = parsed_dt.astimezone(datetime.timezone.utc)
-                air_date_note = "tmdb_air_datetime"
-            else:
-                parsed_dt = parsed_dt.replace(
-                    hour=max(min(int(self._airtime_fallback_hour), 23), 0),
-                    minute=0,
-                    second=0,
-                    microsecond=0,
-                    tzinfo=tz
-                ).astimezone(datetime.timezone.utc)
+            air_date = datetime.datetime.strptime(date_part, "%Y-%m-%d").date()
         except Exception:
-            try:
-                date_only = datetime.datetime.strptime(raw_air_date[:10], "%Y-%m-%d")
-                parsed_dt = date_only.replace(
-                    hour=max(min(int(self._airtime_fallback_hour), 23), 0),
-                    minute=0,
-                    second=0,
-                    microsecond=0,
-                    tzinfo=tz
-                ).astimezone(datetime.timezone.utc)
-                air_date_note = "tmdb_air_date_fallback_hour"
-            except Exception:
-                return None, "tmdb_air_date_parse_failed"
+            return None, "tmdb_air_date_parse_failed"
 
-        due_at_utc = parsed_dt + datetime.timedelta(minutes=int(self._airtime_buffer_minutes or 0))
-        return due_at_utc, f"{air_date_note}+buffer({self._airtime_buffer_minutes}m)"
+        offset_minutes, offset_note = self._resolve_learned_hit_offset_minutes(
+            mediainfo=mediainfo,
+            candidate_item=candidate_item
+        )
+        base_local = datetime.datetime.combine(
+            air_date,
+            datetime.time(hour=0, minute=0, second=0),
+            tzinfo=tz
+        )
+        total_offset = int(offset_minutes or 0) + int(self._airtime_buffer_minutes or 0)
+        due_local = base_local + datetime.timedelta(minutes=total_offset)
+        return due_local.astimezone(datetime.timezone.utc), (
+            f"tmdb_air_date_only+offset({offset_minutes}m,{offset_note})+buffer({self._airtime_buffer_minutes}m)"
+        )
+
+    def _resolve_learned_hit_offset_minutes(
+            self,
+            mediainfo: MediaInfo,
+            candidate_item: Dict[str, Any]) -> Tuple[int, str]:
+        existing = candidate_item.get("learned_hit_minutes")
+        try:
+            if existing is not None:
+                value = int(existing)
+                if 0 <= value <= 1439:
+                    return value, "candidate_pool"
+        except Exception:
+            pass
+
+        history_offset = self._load_offset_from_download_history(mediainfo=mediainfo)
+        if history_offset is not None:
+            candidate_item["learned_hit_minutes"] = int(history_offset)
+            return int(history_offset), "download_history"
+
+        # 无历史命中时间：当天按默认间隔执行，时间点默认为当天00:00（再叠加buffer）
+        return 0, "default_day_start"
+
+    def _load_offset_from_download_history(self, mediainfo: MediaInfo) -> Optional[int]:
+        rows = []
+        try:
+            rows = DownloadHistoryOper().get_last_by(mtype=MediaType.TV.value, tmdbid=mediainfo.tmdb_id)
+        except Exception:
+            rows = []
+        if not rows and mediainfo.title and mediainfo.year:
+            try:
+                rows = DownloadHistoryOper().get_last_by(
+                    title=mediainfo.title,
+                    year=str(mediainfo.year),
+                    season=str(mediainfo.season) if mediainfo.season is not None else None
+                )
+            except Exception:
+                rows = []
+        if not rows:
+            return None
+
+        parsed_rows: List[datetime.datetime] = []
+        try:
+            for row in rows:
+                dt = self._parse_history_date(getattr(row, "date", None))
+                if dt:
+                    parsed_rows.append(dt)
+        except Exception:
+            parsed_rows = []
+        if not parsed_rows:
+            return None
+        latest_day = max(dt.date() for dt in parsed_rows)
+        earliest_on_latest_day = min(dt for dt in parsed_rows if dt.date() == latest_day)
+        return int(earliest_on_latest_day.hour * 60 + earliest_on_latest_day.minute)
+
+    @staticmethod
+    def _parse_history_date(raw_date: Optional[str]) -> Optional[datetime.datetime]:
+        raw = str(raw_date or "").strip()
+        if not raw:
+            return None
+        fmts = ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S")
+        for fmt in fmts:
+            try:
+                return datetime.datetime.strptime(raw, fmt)
+            except Exception:
+                continue
+        try:
+            return datetime.datetime.fromisoformat(raw.replace("Z", "+00:00")).replace(tzinfo=None)
+        except Exception:
+            return None
+
+    def _next_track_time_by_interval(
+            self,
+            last_track_utc: Optional[datetime.datetime],
+            tier: Optional[str]) -> Optional[datetime.datetime]:
+        if not last_track_utc:
+            return None
+        minutes = self._tier_interval_minutes(tier=tier)
+        return last_track_utc + datetime.timedelta(minutes=minutes)
+
+    def _tier_interval_minutes(self, tier: Optional[str]) -> int:
+        if tier == "warm":
+            return max(int(self._accelerate_warm_interval_minutes or 180), 1)
+        if tier == "cold":
+            return max(int(self._accelerate_cold_interval_hours or 24), 1) * 60
+        return max(int(self._accelerate_interval_minutes or 10), 1)
+
+    def _update_learned_hit_minutes(self, candidate_entry: Dict[str, Any]) -> None:
+        now_local = datetime.datetime.now(self._resolve_airtime_tz())
+        now_minutes = int(now_local.hour * 60 + now_local.minute)
+        old = candidate_entry.get("learned_hit_minutes")
+        try:
+            old_minutes = int(old) if old is not None else None
+        except Exception:
+            old_minutes = None
+        if old_minutes is None or now_minutes < old_minutes:
+            candidate_entry["learned_hit_minutes"] = now_minutes
+            candidate_entry["learned_hit_source"] = "self_learning"
 
     def _resolve_airtime_tz(self):
         tz_name = str(self._airtime_timezone or "Asia/Shanghai").strip() or "Asia/Shanghai"
@@ -2294,6 +2402,10 @@ class EmbyWatchAccelerator(_PluginBase):
         if next_track_at:
             return self._format_dt_in_tz(next_track_at)
         if not self._enable_airtime_gate:
+            last_track_utc = self._parse_track_time_utc(candidate_item.get("last_track_at"))
+            if last_track_utc:
+                mins = int(candidate_item.get("default_interval_minutes") or self._tier_interval_minutes(tier="hot"))
+                return self._format_dt_in_tz(last_track_utc + datetime.timedelta(minutes=max(mins, 1)))
             return "-"
         next_air = str(candidate_item.get("next_episode_air_date") or "").strip()
         if next_air:
@@ -2303,13 +2415,13 @@ class EmbyWatchAccelerator(_PluginBase):
                 "season_number": candidate_item.get("next_episode_season"),
                 "episode_number": candidate_item.get("next_episode_number")
             }
-            due_at, _ = self._resolve_next_episode_due_at_utc(mediainfo)
+            due_at, _ = self._resolve_next_episode_due_at_utc(mediainfo, candidate_item)
             if due_at:
                 return self._format_dt_in_tz(due_at)
         last_track_utc = self._parse_track_time_utc(candidate_item.get("last_track_at"))
         if last_track_utc:
-            probe_hours = max(int(self._airtime_probe_interval_hours or 8), 1)
-            return self._format_dt_in_tz(last_track_utc + datetime.timedelta(hours=probe_hours))
+            mins = int(candidate_item.get("default_interval_minutes") or self._tier_interval_minutes(tier="hot"))
+            return self._format_dt_in_tz(last_track_utc + datetime.timedelta(minutes=max(mins, 1)))
         return "-"
 
     def _trim_no_exists_for_current_airing(
