@@ -26,7 +26,7 @@ class EmbyWatchAccelerator(_PluginBase):
     # 插件图标
     plugin_icon = "download.png"
     # 插件版本
-    plugin_version = "1.0.27"
+    plugin_version = "1.0.28"
     # 插件作者
     plugin_author = "codex"
     # 作者主页
@@ -686,7 +686,9 @@ class EmbyWatchAccelerator(_PluginBase):
         stats = {
             "servers": 0,
             "resume_items": 0,
+            "history_items": 0,
             "series_items": 0,
+            "history_series_items": 0,
             "candidate_pool_items": 0,
             "merged_series_items": 0,
             "processed_series": 0,
@@ -725,7 +727,8 @@ class EmbyWatchAccelerator(_PluginBase):
             logger.info(
                 f"继续观看任务结束，模式：{mode}，耗时：{cost:.2f}秒，"
                 f"服务器数：{stats['servers']}，继续观看条目：{stats['resume_items']}，"
-                f"去重剧集数：{stats['series_items']}，候选池剧集数：{stats['candidate_pool_items']}，"
+                f"历史条目：{stats['history_items']}，去重剧集数：{stats['series_items']}，"
+                f"历史去重剧集数：{stats['history_series_items']}，候选池剧集数：{stats['candidate_pool_items']}，"
                 f"联合处理剧集数：{stats['merged_series_items']}，处理剧集数：{stats['processed_series']}，"
                 f"追更尝试/下载：{stats['accelerate_attempts']}/{stats['accelerate_downloads']}，"
                 f"补全尝试/下载：{stats['backfill_attempts']}/{stats['backfill_downloads']}，"
@@ -753,10 +756,16 @@ class EmbyWatchAccelerator(_PluginBase):
             stats["resume_items"] += len(resume_items)
         resume_series_items = self._merge_resume_series(resume_items) if resume_items else []
         stats["series_items"] += len(resume_series_items)
+        history_items = self._get_history_items(emby=emby, server_name=server_name, stats=stats)
+        if history_items:
+            stats["history_items"] += len(history_items)
+        history_series_items = self._merge_history_series(history_items) if history_items else []
+        stats["history_series_items"] += len(history_series_items)
 
         candidate_pool = self._load_candidate_pool(server_name=server_name)
         candidate_pool = self._prune_candidate_pool(candidate_pool)
         self._upsert_candidate_pool_from_resume(candidate_pool=candidate_pool, resume_series_items=resume_series_items)
+        self._upsert_candidate_pool_from_history(candidate_pool=candidate_pool, history_series_items=history_series_items)
         candidate_series_items = self._candidate_pool_to_series_items(candidate_pool=candidate_pool)
         stats["candidate_pool_items"] += len(candidate_series_items)
 
@@ -767,7 +776,7 @@ class EmbyWatchAccelerator(_PluginBase):
         stats["merged_series_items"] += len(series_items)
         logger.info(
             f"本轮待处理剧集：继续观看={len(resume_series_items)}，"
-            f"候选池={len(candidate_series_items)}，联合去重后={len(series_items)}"
+            f"播放历史={len(history_series_items)}，候选池={len(candidate_series_items)}，联合去重后={len(series_items)}"
         )
         if not series_items:
             logger.info("继续观看与追更候选池均为空，跳过本轮")
@@ -980,6 +989,29 @@ class EmbyWatchAccelerator(_PluginBase):
                 "last_seen_at": now
             }
 
+    def _upsert_candidate_pool_from_history(
+            self,
+            candidate_pool: Dict[str, Dict[str, Any]],
+            history_series_items: List[Dict[str, Any]]) -> None:
+        now = datetime.datetime.now().isoformat()
+        for item in history_series_items:
+            series_id = str(item.get("series_id") or "").strip()
+            season = item.get("season")
+            if not series_id or season is None:
+                continue
+            key = self._candidate_key(series_id=series_id, season=season)
+            existing = candidate_pool.get(key) or {}
+            candidate_pool[key] = {
+                "series_id": series_id,
+                "series_name": item.get("series_name") or existing.get("series_name"),
+                "season": int(season),
+                "episode": existing.get("episode") or item.get("episode"),
+                "user": existing.get("user") or item.get("user"),
+                "last_played": existing.get("last_played") or (item.get("last_played") or datetime.datetime.min).isoformat(),
+                "playback_ticks": int(existing.get("playback_ticks") or item.get("playback_ticks") or 0),
+                "last_seen_at": existing.get("last_seen_at") or now
+            }
+
     @staticmethod
     def _candidate_pool_to_series_items(candidate_pool: Dict[str, Dict[str, Any]]) -> List[Dict[str, Any]]:
         result: List[Dict[str, Any]] = []
@@ -1170,6 +1202,49 @@ class EmbyWatchAccelerator(_PluginBase):
             all_items.extend(selected_items)
             if len(all_items) >= limit:
                 break
+        return all_items[:limit]
+
+    def _get_history_items(self, emby, server_name: str = "", stats: Optional[Dict[str, int]] = None) -> List[dict]:
+        users = self._get_emby_users(emby)
+        if not users:
+            return []
+        blacklist_names, blacklist_paths, blacklist_library_ids = self._build_library_blacklist_for_server(emby, server_name)
+        limit = max(self._resume_limit, 1)
+        per_user_limit = max(1, int((limit + len(users) - 1) / len(users)))
+        all_items: List[dict] = []
+        for user in users:
+            user_id = user.get("Id")
+            if not user_id:
+                continue
+            user_name = user.get("Name") or user_id
+            url = (f"[HOST]emby/Users/{user_id}/Items"
+                   f"?Recursive=true&IncludeItemTypes=Episode&Filters=IsPlayed"
+                   f"&SortBy=DatePlayed&SortOrder=Descending&Limit={per_user_limit}"
+                   "&Fields=ProviderIds,SeriesId,ParentIndexNumber,IndexNumber,ProductionYear,Path,AncestorIds,DatePlayed"
+                   "&api_key=[APIKEY]")
+            res = emby.get_data(url)
+            if not res or res.status_code != 200:
+                continue
+            items = res.json().get("Items") or []
+            filtered_items = []
+            for episode_item in items:
+                if episode_item.get("Type") != "Episode":
+                    continue
+                tagged_item = dict(episode_item)
+                tagged_item["_mp_user"] = user_name
+                if self._is_blacklisted_library_item(
+                        tagged_item,
+                        blacklisted_paths=blacklist_paths,
+                        blacklisted_library_ids=blacklist_library_ids,
+                        blacklisted_library_names=blacklist_names):
+                    if stats is not None:
+                        stats["skipped_library_blacklist"] = stats.get("skipped_library_blacklist", 0) + 1
+                    continue
+                filtered_items.append(tagged_item)
+            all_items.extend(filtered_items[:per_user_limit])
+            if len(all_items) >= limit:
+                break
+        logger.info(f"播放历史候选条目数：{len(all_items[:limit])}")
         return all_items[:limit]
 
     @staticmethod
@@ -1390,6 +1465,46 @@ class EmbyWatchAccelerator(_PluginBase):
             f"重复较旧={reason_counter['duplicate_older']}"
         )
         logger.info(f"继续观看去重后剧集数：{len(series_map)}")
+        return list(series_map.values())
+
+    def _merge_history_series(self, items: List[dict]) -> List[dict]:
+        if not items:
+            return []
+        series_map: Dict[str, dict] = {}
+        now = datetime.datetime.now()
+        skipped_missing = 0
+        skipped_days = 0
+        for item in items:
+            series_id = item.get("SeriesId")
+            season = item.get("ParentIndexNumber")
+            episode = item.get("IndexNumber")
+            if not series_id or not season:
+                skipped_missing += 1
+                continue
+            last_played = (item.get("UserData") or {}).get("LastPlayedDate") or item.get("DatePlayed")
+            last_played_dt = self._parse_last_played(last_played)
+            if self._resume_days and last_played_dt and (now - last_played_dt).days > self._resume_days:
+                skipped_days += 1
+                continue
+            key = f"{series_id}:{season}"
+            record = series_map.get(key)
+            current_dt = last_played_dt or datetime.datetime.min
+            record_dt = (record or {}).get("last_played", datetime.datetime.min)
+            if (not record) or current_dt >= record_dt:
+                series_map[key] = {
+                    "series_id": series_id,
+                    "season": int(season) if season else None,
+                    "episode": int(episode) if episode else None,
+                    "series_name": item.get("SeriesName") or item.get("Name"),
+                    "last_played": current_dt,
+                    "playback_ticks": self._parse_playback_ticks(item),
+                    "user": item.get("_mp_user"),
+                    "_source": "history"
+                }
+        logger.info(
+            f"播放历史去重后剧集数：{len(series_map)}，"
+            f"排除缺少series/season={skipped_missing}，超出天数={skipped_days}"
+        )
         return list(series_map.values())
 
     @staticmethod
