@@ -26,7 +26,7 @@ class EmbyWatchAccelerator(_PluginBase):
     # 插件图标
     plugin_icon = "download.png"
     # 插件版本
-    plugin_version = "1.0.28"
+    plugin_version = "1.0.29"
     # 插件作者
     plugin_author = "codex"
     # 作者主页
@@ -41,8 +41,13 @@ class EmbyWatchAccelerator(_PluginBase):
     # 配置项
     _enabled: bool = False
     _accelerate_interval_minutes: int = 10
+    _accelerate_warm_interval_minutes: int = 180
+    _accelerate_cold_interval_hours: int = 24
+    _accelerate_cold_enabled: bool = True
     _backfill_interval_hours: int = 6
     _resume_limit: int = 50
+    _history_limit: int = 80
+    _recent_added_limit: int = 40
     _resume_days: int = 30
     _user_whitelist: str = ""
     _user_blacklist: str = ""
@@ -53,6 +58,8 @@ class EmbyWatchAccelerator(_PluginBase):
     _candidate_retention_days: int = 30
     _candidate_pool_clear: bool = False
     _candidate_pool_remove: str = ""
+    _candidate_pool_pin_add: str = ""
+    _candidate_pool_pin_remove: str = ""
 
     def init_plugin(self, config: dict = None):
         # 停止现有任务
@@ -61,8 +68,13 @@ class EmbyWatchAccelerator(_PluginBase):
         if config:
             self._enabled = bool(config.get("enabled"))
             self._accelerate_interval_minutes = int(config.get("accelerate_interval_minutes") or 10)
+            self._accelerate_warm_interval_minutes = int(config.get("accelerate_warm_interval_minutes") or 180)
+            self._accelerate_cold_interval_hours = int(config.get("accelerate_cold_interval_hours") or 24)
+            self._accelerate_cold_enabled = bool(config.get("accelerate_cold_enabled", True))
             self._backfill_interval_hours = int(config.get("backfill_interval_hours") or 6)
             self._resume_limit = int(config.get("resume_limit") or 50)
+            self._history_limit = int(config.get("history_limit") or 80)
+            self._recent_added_limit = int(config.get("recent_added_limit") or 40)
             self._resume_days = int(config.get("resume_days") or 30)
             self._user_whitelist = (config.get("user_whitelist") or "").strip()
             self._user_blacklist = (config.get("user_blacklist") or "").strip()
@@ -72,17 +84,23 @@ class EmbyWatchAccelerator(_PluginBase):
             self._candidate_retention_days = int(config.get("candidate_retention_days") or 30)
             self._candidate_pool_clear = bool(config.get("candidate_pool_clear"))
             self._candidate_pool_remove = (config.get("candidate_pool_remove") or "").strip()
+            self._candidate_pool_pin_add = (config.get("candidate_pool_pin_add") or "").strip()
+            self._candidate_pool_pin_remove = (config.get("candidate_pool_pin_remove") or "").strip()
 
         config_changed = False
-        if self._candidate_pool_clear or self._candidate_pool_remove:
+        if self._candidate_pool_clear or self._candidate_pool_remove or self._candidate_pool_pin_add or self._candidate_pool_pin_remove:
             removed = self._manage_candidate_pool(
                 clear_all=self._candidate_pool_clear,
-                remove_spec=self._candidate_pool_remove
+                remove_spec=self._candidate_pool_remove,
+                pin_add_spec=self._candidate_pool_pin_add,
+                pin_remove_spec=self._candidate_pool_pin_remove
             )
             logger.info(f"候选池管理操作完成，移除条目数：{removed}")
             self._append_log(f"候选池管理操作完成，移除条目数：{removed}")
             self._candidate_pool_clear = False
             self._candidate_pool_remove = ""
+            self._candidate_pool_pin_add = ""
+            self._candidate_pool_pin_remove = ""
             config_changed = True
 
         if self._run_once:
@@ -109,14 +127,28 @@ class EmbyWatchAccelerator(_PluginBase):
     def get_service(self) -> List[Dict[str, Any]]:
         if not self._enabled:
             return []
-        return [
+        services = [
             {
-                "id": "EmbyWatchAccelerate",
-                "name": "Emby继续观看追更（更新）",
+                "id": "EmbyWatchAccelerateHot",
+                "name": "Emby追更（热门池）",
                 "trigger": "interval",
-                "func": self._run_accelerate,
+                "func": self._run_accelerate_hot,
                 "kwargs": {"minutes": max(self._accelerate_interval_minutes, 1)}
             },
+            {
+                "id": "EmbyWatchAccelerateWarm",
+                "name": "Emby追更（温池）",
+                "trigger": "interval",
+                "func": self._run_accelerate_warm,
+                "kwargs": {"minutes": max(self._accelerate_warm_interval_minutes, 1)}
+            },
+            {
+                "id": "EmbyWatchAccelerateCold",
+                "name": "Emby追更（冷池）",
+                "trigger": "interval",
+                "func": self._run_accelerate_cold,
+                "kwargs": {"hours": max(self._accelerate_cold_interval_hours, 1)}
+            } if self._accelerate_cold_enabled else None,
             {
                 "id": "EmbyWatchBackfill",
                 "name": "Emby继续观看追更（补全）",
@@ -125,6 +157,7 @@ class EmbyWatchAccelerator(_PluginBase):
                 "kwargs": {"hours": max(self._backfill_interval_hours, 1)}
             }
         ]
+        return [item for item in services if item]
 
     def get_form(self) -> Tuple[List[dict], Dict[str, Any]]:
         return [
@@ -176,6 +209,21 @@ class EmbyWatchAccelerator(_PluginBase):
                                     {
                                         "component": "VCol",
                                         "props": {"cols": 12, "md": 3},
+                                        "content": [{"component": "VTextField", "props": {"model": "accelerate_warm_interval_minutes", "label": "温池间隔（分钟）", "type": "number", "min": 1}}]
+                                    },
+                                    {
+                                        "component": "VCol",
+                                        "props": {"cols": 12, "md": 3},
+                                        "content": [{"component": "VTextField", "props": {"model": "accelerate_cold_interval_hours", "label": "冷池间隔（小时）", "type": "number", "min": 1}}]
+                                    },
+                                    {
+                                        "component": "VCol",
+                                        "props": {"cols": 12, "md": 3},
+                                        "content": [{"component": "VSwitch", "props": {"model": "accelerate_cold_enabled", "label": "启用冷池"}}]
+                                    },
+                                    {
+                                        "component": "VCol",
+                                        "props": {"cols": 12, "md": 3},
                                         "content": [{"component": "VTextField", "props": {"model": "backfill_interval_hours", "label": "补全缺失间隔（小时）", "type": "number", "min": 1}}]
                                     },
                                     {
@@ -192,6 +240,16 @@ class EmbyWatchAccelerator(_PluginBase):
                                         "component": "VCol",
                                         "props": {"cols": 12, "md": 3},
                                         "content": [{"component": "VTextField", "props": {"model": "candidate_retention_days", "label": "候选池保留天数", "type": "number", "min": 1}}]
+                                    },
+                                    {
+                                        "component": "VCol",
+                                        "props": {"cols": 12, "md": 3},
+                                        "content": [{"component": "VTextField", "props": {"model": "history_limit", "label": "播放历史读取数量", "type": "number", "min": 1}}]
+                                    },
+                                    {
+                                        "component": "VCol",
+                                        "props": {"cols": 12, "md": 3},
+                                        "content": [{"component": "VTextField", "props": {"model": "recent_added_limit", "label": "最近新增读取数量", "type": "number", "min": 1}}]
                                     }
                                 ]
                             }
@@ -251,6 +309,32 @@ class EmbyWatchAccelerator(_PluginBase):
                                                 "autoGrow": True
                                             }
                                         }]
+                                    },
+                                    {
+                                        "component": "VCol",
+                                        "props": {"cols": 12, "md": 6},
+                                        "content": [{
+                                            "component": "VTextarea",
+                                            "props": {
+                                                "model": "candidate_pool_pin_add",
+                                                "label": "钉住候选（每行：服务器名:SeriesId:Season）",
+                                                "rows": 2,
+                                                "autoGrow": True
+                                            }
+                                        }]
+                                    },
+                                    {
+                                        "component": "VCol",
+                                        "props": {"cols": 12, "md": 6},
+                                        "content": [{
+                                            "component": "VTextarea",
+                                            "props": {
+                                                "model": "candidate_pool_pin_remove",
+                                                "label": "取消钉住（每行：服务器名:SeriesId:Season）",
+                                                "rows": 2,
+                                                "autoGrow": True
+                                            }
+                                        }]
                                     }
                                 ]
                             }
@@ -269,8 +353,13 @@ class EmbyWatchAccelerator(_PluginBase):
         ], {
             "enabled": False,
             "accelerate_interval_minutes": 10,
+            "accelerate_warm_interval_minutes": 180,
+            "accelerate_cold_interval_hours": 24,
+            "accelerate_cold_enabled": True,
             "backfill_interval_hours": 6,
             "resume_limit": 50,
+            "history_limit": 80,
+            "recent_added_limit": 40,
             "resume_days": 30,
             "candidate_retention_days": 30,
             "user_whitelist": "",
@@ -279,7 +368,9 @@ class EmbyWatchAccelerator(_PluginBase):
             "backfill_stats_only": False,
             "run_once": False,
             "candidate_pool_clear": False,
-            "candidate_pool_remove": ""
+            "candidate_pool_remove": "",
+            "candidate_pool_pin_add": "",
+            "candidate_pool_pin_remove": ""
         }
 
     def get_page(self) -> Optional[List[dict]]:
@@ -376,13 +467,17 @@ class EmbyWatchAccelerator(_PluginBase):
         all_servers = self.get_data(self._candidate_pool_storage_key()) or {}
         if not isinstance(all_servers, dict) or not all_servers:
             return []
+        all_pins = self._load_candidate_pins()
         server_cards = []
         for server_name in sorted(all_servers.keys()):
             pool = all_servers.get(server_name) or {}
             if not isinstance(pool, dict) or not pool:
                 continue
+            pin_set = all_pins.get(server_name.lower(), set())
             items = []
             for key, item in sorted(pool.items(), key=lambda kv: str((kv[1] or {}).get("last_seen_at") or ""), reverse=True):
+                pin_text = " | 钉住=是" if key in pin_set else ""
+                tier_text = self._candidate_tier(self._parse_last_played(str(item.get("last_seen_at") or "")))
                 items.append({
                     "component": "VListItem",
                     "props": {"density": "compact"},
@@ -396,8 +491,9 @@ class EmbyWatchAccelerator(_PluginBase):
                             "text": (
                                 f"SeriesId={item.get('series_id') or '-'} | "
                                 f"用户={item.get('user') or '-'} | "
+                                f"分层={tier_text} | "
                                 f"最近入池={item.get('last_seen_at') or '-'} | "
-                                f"键={key}"
+                                f"键={key}{pin_text}"
                             )
                         }
                     ]
@@ -420,8 +516,13 @@ class EmbyWatchAccelerator(_PluginBase):
         return {
             "enabled": self._enabled,
             "accelerate_interval_minutes": self._accelerate_interval_minutes,
+            "accelerate_warm_interval_minutes": self._accelerate_warm_interval_minutes,
+            "accelerate_cold_interval_hours": self._accelerate_cold_interval_hours,
+            "accelerate_cold_enabled": self._accelerate_cold_enabled,
             "backfill_interval_hours": self._backfill_interval_hours,
             "resume_limit": self._resume_limit,
+            "history_limit": self._history_limit,
+            "recent_added_limit": self._recent_added_limit,
             "resume_days": self._resume_days,
             "candidate_retention_days": self._candidate_retention_days,
             "user_whitelist": self._user_whitelist,
@@ -430,17 +531,28 @@ class EmbyWatchAccelerator(_PluginBase):
             "backfill_stats_only": self._backfill_stats_only,
             "run_once": self._run_once,
             "candidate_pool_clear": self._candidate_pool_clear,
-            "candidate_pool_remove": self._candidate_pool_remove
+            "candidate_pool_remove": self._candidate_pool_remove,
+            "candidate_pool_pin_add": self._candidate_pool_pin_add,
+            "candidate_pool_pin_remove": self._candidate_pool_pin_remove
         }
 
     def stop_service(self):
         pass
 
     def _run_accelerate(self):
-        self._process(mode="accelerate")
+        self._process(mode="accelerate", tier="hot")
+
+    def _run_accelerate_hot(self):
+        self._process(mode="accelerate", tier="hot")
+
+    def _run_accelerate_warm(self):
+        self._process(mode="accelerate", tier="warm")
+
+    def _run_accelerate_cold(self):
+        self._process(mode="accelerate", tier="cold")
 
     def _run_backfill(self):
-        self._process(mode="backfill")
+        self._process(mode="backfill", tier=None)
 
     def _append_log(self, message: str, level: str = "INFO") -> None:
         now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -675,7 +787,7 @@ class EmbyWatchAccelerator(_PluginBase):
             content.append({"component": "VCardText", "props": {"class": "pa-0 mt-4"}, "text": "暂无记录"})
         return content
 
-    def _process(self, mode: str):
+    def _process(self, mode: str, tier: Optional[str] = None):
         if not self._enabled:
             return
         if not _lock.acquire(blocking=False):
@@ -687,8 +799,10 @@ class EmbyWatchAccelerator(_PluginBase):
             "servers": 0,
             "resume_items": 0,
             "history_items": 0,
+            "recent_added_items": 0,
             "series_items": 0,
             "history_series_items": 0,
+            "recent_added_series_items": 0,
             "candidate_pool_items": 0,
             "merged_series_items": 0,
             "processed_series": 0,
@@ -704,8 +818,9 @@ class EmbyWatchAccelerator(_PluginBase):
             "user_stats": {}
         }
         try:
-            logger.info(f"继续观看任务开始，模式：{mode}")
-            self._append_log(f"继续观看任务开始，模式：{mode}")
+            logger.info(f"继续观看任务开始，模式：{mode}，分层：{tier or 'all'}")
+            tier_text = tier or "all"
+            self._append_log(f"继续观看任务开始，模式：{mode}，分层：{tier_text}")
             services = MediaServerHelper().get_services()
             if not services:
                 logger.info("未检测到媒体服务器配置，任务结束")
@@ -717,7 +832,7 @@ class EmbyWatchAccelerator(_PluginBase):
                 logger.info(f"开始处理Emby服务器：{name}")
                 self._append_log(f"开始处理Emby服务器：{name}")
                 stats["servers"] += 1
-                self._process_emby_service(service.instance, mode=mode, stats=stats, server_name=name)
+                self._process_emby_service(service.instance, mode=mode, stats=stats, server_name=name, tier=tier)
         finally:
             cost = (datetime.datetime.now() - start_time).total_seconds()
             stats["mode"] = mode
@@ -728,7 +843,8 @@ class EmbyWatchAccelerator(_PluginBase):
                 f"继续观看任务结束，模式：{mode}，耗时：{cost:.2f}秒，"
                 f"服务器数：{stats['servers']}，继续观看条目：{stats['resume_items']}，"
                 f"历史条目：{stats['history_items']}，去重剧集数：{stats['series_items']}，"
-                f"历史去重剧集数：{stats['history_series_items']}，候选池剧集数：{stats['candidate_pool_items']}，"
+                f"历史去重剧集数：{stats['history_series_items']}，最近新增条目：{stats['recent_added_items']}，"
+                f"最近新增去重剧集数：{stats['recent_added_series_items']}，候选池剧集数：{stats['candidate_pool_items']}，"
                 f"联合处理剧集数：{stats['merged_series_items']}，处理剧集数：{stats['processed_series']}，"
                 f"追更尝试/下载：{stats['accelerate_attempts']}/{stats['accelerate_downloads']}，"
                 f"补全尝试/下载：{stats['backfill_attempts']}/{stats['backfill_downloads']}，"
@@ -740,6 +856,7 @@ class EmbyWatchAccelerator(_PluginBase):
             )
             self._append_log(
                 f"任务结束，模式：{mode}，耗时：{cost:.2f}秒，"
+                f"分层：{tier or 'all'}，"
                 f"候选池剧集数：{stats['candidate_pool_items']}，"
                 f"追更尝试/下载：{stats['accelerate_attempts']}/{stats['accelerate_downloads']}，"
                 f"补全尝试/下载：{stats['backfill_attempts']}/{stats['backfill_downloads']}，"
@@ -748,7 +865,7 @@ class EmbyWatchAccelerator(_PluginBase):
             )
             _lock.release()
 
-    def _process_emby_service(self, emby, mode: str, stats: Dict[str, int], server_name: str = ""):
+    def _process_emby_service(self, emby, mode: str, stats: Dict[str, int], server_name: str = "", tier: Optional[str] = None):
         resume_items = self._get_resume_items(emby, stats, server_name)
         if not resume_items:
             logger.info("未获取到继续观看的剧集记录，将仅使用追更候选池")
@@ -761,12 +878,22 @@ class EmbyWatchAccelerator(_PluginBase):
             stats["history_items"] += len(history_items)
         history_series_items = self._merge_history_series(history_items) if history_items else []
         stats["history_series_items"] += len(history_series_items)
+        recent_added_items = self._get_recent_added_items(emby=emby, server_name=server_name, stats=stats)
+        recent_added_series_items = self._merge_recent_added_series(recent_added_items) if recent_added_items else []
+        stats["recent_added_items"] = stats.get("recent_added_items", 0) + len(recent_added_items)
+        stats["recent_added_series_items"] = stats.get("recent_added_series_items", 0) + len(recent_added_series_items)
 
         candidate_pool = self._load_candidate_pool(server_name=server_name)
-        candidate_pool = self._prune_candidate_pool(candidate_pool)
+        candidate_pool = self._prune_candidate_pool(candidate_pool, server_name=server_name)
         self._upsert_candidate_pool_from_resume(candidate_pool=candidate_pool, resume_series_items=resume_series_items)
         self._upsert_candidate_pool_from_history(candidate_pool=candidate_pool, history_series_items=history_series_items)
+        self._upsert_candidate_pool_from_recent_added(
+            candidate_pool=candidate_pool,
+            recent_added_series_items=recent_added_series_items
+        )
+        self._apply_pins_to_pool(server_name=server_name, candidate_pool=candidate_pool)
         candidate_series_items = self._candidate_pool_to_series_items(candidate_pool=candidate_pool)
+        candidate_series_items = self._filter_series_by_tier(candidate_series_items, tier=tier, mode=mode)
         stats["candidate_pool_items"] += len(candidate_series_items)
 
         series_items = self._merge_series_items(
@@ -776,7 +903,8 @@ class EmbyWatchAccelerator(_PluginBase):
         stats["merged_series_items"] += len(series_items)
         logger.info(
             f"本轮待处理剧集：继续观看={len(resume_series_items)}，"
-            f"播放历史={len(history_series_items)}，候选池={len(candidate_series_items)}，联合去重后={len(series_items)}"
+            f"播放历史={len(history_series_items)}，最近新增={len(recent_added_series_items)}，"
+            f"候选池={len(candidate_series_items)}，联合去重后={len(series_items)}，分层={tier or 'all'}"
         )
         if not series_items:
             logger.info("继续观看与追更候选池均为空，跳过本轮")
@@ -813,7 +941,8 @@ class EmbyWatchAccelerator(_PluginBase):
             if mediainfo.type != MediaType.TV:
                 logger.info(f"跳过非电视剧：{mediainfo.title_year}")
                 stats["skipped_non_tv"] += 1
-                candidate_pool.pop(candidate_key, None)
+                if not bool((candidate_pool.get(candidate_key) or {}).get("pinned")):
+                    candidate_pool.pop(candidate_key, None)
                 continue
 
             stats["processed_series"] += 1
@@ -871,8 +1000,11 @@ class EmbyWatchAccelerator(_PluginBase):
                             series_id=series_id, server_name=server_name, emby=emby
                         )
                 else:
-                    logger.info(f"{mediainfo.title_year} 已完结且无缺失，从追更候选池移除")
-                    candidate_pool.pop(candidate_key, None)
+                    if bool((candidate_pool.get(candidate_key) or {}).get("pinned")):
+                        logger.info(f"{mediainfo.title_year} 已完结且无缺失，但已钉住，保留候选池")
+                    else:
+                        logger.info(f"{mediainfo.title_year} 已完结且无缺失，从追更候选池移除")
+                        candidate_pool.pop(candidate_key, None)
                 continue
 
             if actionable_no_exists:
@@ -934,6 +1066,10 @@ class EmbyWatchAccelerator(_PluginBase):
     def _candidate_pool_storage_key() -> str:
         return "track_candidate_pool"
 
+    @staticmethod
+    def _candidate_pool_pin_storage_key() -> str:
+        return "track_candidate_pins"
+
     def _load_candidate_pool(self, server_name: str) -> Dict[str, Dict[str, Any]]:
         all_servers = self.get_data(self._candidate_pool_storage_key()) or {}
         server_key = (server_name or "default").strip() or "default"
@@ -950,11 +1086,36 @@ class EmbyWatchAccelerator(_PluginBase):
         all_servers[server_key] = candidate_pool
         self.save_data(self._candidate_pool_storage_key(), all_servers)
 
-    def _prune_candidate_pool(self, candidate_pool: Dict[str, Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+    def _load_candidate_pins(self) -> Dict[str, set]:
+        raw = self.get_data(self._candidate_pool_pin_storage_key()) or {}
+        result: Dict[str, set] = {}
+        if not isinstance(raw, dict):
+            return result
+        for server, keys in raw.items():
+            if isinstance(keys, list):
+                result[str(server).lower()] = set(str(key) for key in keys if key)
+        return result
+
+    def _save_candidate_pins(self, pins: Dict[str, set]) -> None:
+        payload = {server: sorted(list(keys)) for server, keys in pins.items() if keys}
+        self.save_data(self._candidate_pool_pin_storage_key(), payload)
+
+    def _apply_pins_to_pool(self, server_name: str, candidate_pool: Dict[str, Dict[str, Any]]) -> None:
+        pins = self._load_candidate_pins()
+        pin_set = pins.get((server_name or "").lower(), set()) or set()
+        for key, item in candidate_pool.items():
+            item["pinned"] = key in pin_set
+
+    def _prune_candidate_pool(self, candidate_pool: Dict[str, Dict[str, Any]], server_name: str = "") -> Dict[str, Dict[str, Any]]:
         now = datetime.datetime.now()
+        pin_set = self._load_candidate_pins().get((server_name or "").lower(), set()) or set()
         pruned: Dict[str, Dict[str, Any]] = {}
         removed = 0
         for key, item in (candidate_pool or {}).items():
+            if key in pin_set:
+                item["pinned"] = True
+                pruned[key] = item
+                continue
             last_seen_str = str(item.get("last_seen_at") or "").strip()
             last_seen_dt = self._parse_last_played(last_seen_str) if last_seen_str else None
             if not last_seen_dt:
@@ -1009,7 +1170,30 @@ class EmbyWatchAccelerator(_PluginBase):
                 "user": existing.get("user") or item.get("user"),
                 "last_played": existing.get("last_played") or (item.get("last_played") or datetime.datetime.min).isoformat(),
                 "playback_ticks": int(existing.get("playback_ticks") or item.get("playback_ticks") or 0),
-                "last_seen_at": existing.get("last_seen_at") or now
+                "last_seen_at": now
+            }
+
+    def _upsert_candidate_pool_from_recent_added(
+            self,
+            candidate_pool: Dict[str, Dict[str, Any]],
+            recent_added_series_items: List[Dict[str, Any]]) -> None:
+        now = datetime.datetime.now().isoformat()
+        for item in recent_added_series_items:
+            series_id = str(item.get("series_id") or "").strip()
+            season = item.get("season")
+            if not series_id or season is None:
+                continue
+            key = self._candidate_key(series_id=series_id, season=season)
+            existing = candidate_pool.get(key) or {}
+            candidate_pool[key] = {
+                "series_id": series_id,
+                "series_name": item.get("series_name") or existing.get("series_name"),
+                "season": int(season),
+                "episode": existing.get("episode") or item.get("episode"),
+                "user": existing.get("user") or item.get("user"),
+                "last_played": existing.get("last_played") or (item.get("last_played") or datetime.datetime.min).isoformat(),
+                "playback_ticks": int(existing.get("playback_ticks") or item.get("playback_ticks") or 0),
+                "last_seen_at": now
             }
 
     @staticmethod
@@ -1028,9 +1212,37 @@ class EmbyWatchAccelerator(_PluginBase):
                 "last_played": datetime.datetime.min,
                 "playback_ticks": int(item.get("playback_ticks") or 0),
                 "user": item.get("user"),
+                "last_seen_at": item.get("last_seen_at"),
+                "pinned": bool(item.get("pinned")),
                 "_source": "candidate_pool"
             })
         return result
+
+    def _filter_series_by_tier(self, series_items: List[Dict[str, Any]], tier: Optional[str], mode: str) -> List[Dict[str, Any]]:
+        if mode != "accelerate" or not tier:
+            return series_items
+        filtered: List[Dict[str, Any]] = []
+        for item in series_items:
+            if item.get("pinned"):
+                filtered.append(item)
+                continue
+            last_seen = self._parse_last_played(str(item.get("last_seen_at") or ""))
+            item_tier = self._candidate_tier(last_seen)
+            if item_tier == tier:
+                filtered.append(item)
+        return filtered
+
+    @staticmethod
+    def _candidate_tier(last_seen: Optional[datetime.datetime]) -> str:
+        if not last_seen:
+            return "cold"
+        now = datetime.datetime.now()
+        days = (now - last_seen).days
+        if days <= 7:
+            return "hot"
+        if days <= 30:
+            return "warm"
+        return "cold"
 
     @staticmethod
     def _merge_series_items(
@@ -1046,24 +1258,27 @@ class EmbyWatchAccelerator(_PluginBase):
             merged[key] = item
         return list(merged.values())
 
-    def _manage_candidate_pool(self, clear_all: bool, remove_spec: str) -> int:
+    def _manage_candidate_pool(self, clear_all: bool, remove_spec: str, pin_add_spec: str, pin_remove_spec: str) -> int:
         all_servers = self.get_data(self._candidate_pool_storage_key()) or {}
         if not isinstance(all_servers, dict):
             all_servers = {}
+        pins = self._load_candidate_pins()
         removed = 0
         if clear_all:
             for _, pool in all_servers.items():
                 if isinstance(pool, dict):
                     removed += len(pool)
             self.save_data(self._candidate_pool_storage_key(), {})
+            self.save_data(self._candidate_pool_pin_storage_key(), {})
             return removed
-        if not remove_spec:
-            return removed
-        rules = self._parse_candidate_remove_rules(remove_spec)
+        remove_rules = self._parse_candidate_remove_rules(remove_spec)
+        pin_add_rules = self._parse_candidate_remove_rules(pin_add_spec)
+        pin_remove_rules = self._parse_candidate_remove_rules(pin_remove_spec)
         for server_name in list(all_servers.keys()):
             pool = all_servers.get(server_name) or {}
             if not isinstance(pool, dict) or not pool:
                 continue
+            pin_set = pins.get(server_name.lower(), set())
             for key in list(pool.keys()):
                 series_id, season = self._split_candidate_key(key)
                 if not series_id or season is None:
@@ -1072,11 +1287,36 @@ class EmbyWatchAccelerator(_PluginBase):
                         server_name=server_name,
                         series_id=series_id,
                         season=season,
-                        rules=rules):
+                        rules=remove_rules):
                     pool.pop(key, None)
+                    pin_set.discard(key)
                     removed += 1
+                    continue
+                if self._match_candidate_remove_rule(server_name, series_id, season, pin_add_rules):
+                    pin_set.add(key)
+                if self._match_candidate_remove_rule(server_name, series_id, season, pin_remove_rules):
+                    pin_set.discard(key)
+            pins[server_name.lower()] = pin_set
             all_servers[server_name] = pool
+        # 支持钉住尚未入池的目标，后续入池后自动生效
+        for rule in pin_add_rules:
+            server_key = "*" if rule.get("server") == "*" else str(rule.get("server"))
+            key = self._candidate_key(rule.get("series_id"), int(rule.get("season")))
+            if server_key == "*":
+                for name in list(all_servers.keys()):
+                    pins.setdefault(name.lower(), set()).add(key)
+            else:
+                pins.setdefault(server_key.lower(), set()).add(key)
+        for rule in pin_remove_rules:
+            server_key = "*" if rule.get("server") == "*" else str(rule.get("server"))
+            key = self._candidate_key(rule.get("series_id"), int(rule.get("season")))
+            if server_key == "*":
+                for name in list(pins.keys()):
+                    pins.setdefault(name, set()).discard(key)
+            else:
+                pins.setdefault(server_key.lower(), set()).discard(key)
         self.save_data(self._candidate_pool_storage_key(), all_servers)
+        self._save_candidate_pins(pins)
         return removed
 
     @staticmethod
@@ -1209,7 +1449,7 @@ class EmbyWatchAccelerator(_PluginBase):
         if not users:
             return []
         blacklist_names, blacklist_paths, blacklist_library_ids = self._build_library_blacklist_for_server(emby, server_name)
-        limit = max(self._resume_limit, 1)
+        limit = max(self._history_limit, 1)
         per_user_limit = max(1, int((limit + len(users) - 1) / len(users)))
         all_items: List[dict] = []
         for user in users:
@@ -1246,6 +1486,35 @@ class EmbyWatchAccelerator(_PluginBase):
                 break
         logger.info(f"播放历史候选条目数：{len(all_items[:limit])}")
         return all_items[:limit]
+
+    def _get_recent_added_items(self, emby, server_name: str = "", stats: Optional[Dict[str, int]] = None) -> List[dict]:
+        limit = max(self._recent_added_limit, 1)
+        url = ("[HOST]emby/Items"
+               f"?Recursive=true&IncludeItemTypes=Episode&SortBy=DateCreated&SortOrder=Descending&Limit={limit}"
+               "&Fields=ProviderIds,SeriesId,ParentIndexNumber,IndexNumber,ProductionYear,Path,AncestorIds,DateCreated"
+               "&api_key=[APIKEY]")
+        res = emby.get_data(url)
+        if not res or res.status_code != 200:
+            return []
+        items = res.json().get("Items") or []
+        blacklist_names, blacklist_paths, blacklist_library_ids = self._build_library_blacklist_for_server(emby, server_name)
+        filtered: List[dict] = []
+        for item in items:
+            if item.get("Type") != "Episode":
+                continue
+            tagged_item = dict(item)
+            tagged_item["_mp_user"] = "system"
+            if self._is_blacklisted_library_item(
+                    tagged_item,
+                    blacklisted_paths=blacklist_paths,
+                    blacklisted_library_ids=blacklist_library_ids,
+                    blacklisted_library_names=blacklist_names):
+                if stats is not None:
+                    stats["skipped_library_blacklist"] = stats.get("skipped_library_blacklist", 0) + 1
+                continue
+            filtered.append(tagged_item)
+        logger.info(f"最近新增候选条目数：{len(filtered)}")
+        return filtered
 
     @staticmethod
     def _log_resume_schema_probe(user_name: str, episode_items: List[dict]) -> None:
@@ -1505,6 +1774,31 @@ class EmbyWatchAccelerator(_PluginBase):
             f"播放历史去重后剧集数：{len(series_map)}，"
             f"排除缺少series/season={skipped_missing}，超出天数={skipped_days}"
         )
+        return list(series_map.values())
+
+    @staticmethod
+    def _merge_recent_added_series(items: List[dict]) -> List[dict]:
+        if not items:
+            return []
+        series_map: Dict[str, dict] = {}
+        for item in items:
+            series_id = item.get("SeriesId")
+            season = item.get("ParentIndexNumber")
+            episode = item.get("IndexNumber")
+            if not series_id or not season:
+                continue
+            key = f"{series_id}:{season}"
+            series_map[key] = {
+                "series_id": series_id,
+                "season": int(season) if season else None,
+                "episode": int(episode) if episode else None,
+                "series_name": item.get("SeriesName") or item.get("Name"),
+                "last_played": datetime.datetime.min,
+                "playback_ticks": 0,
+                "user": "system",
+                "_source": "recent_added"
+            }
+        logger.info(f"最近新增去重后剧集数：{len(series_map)}")
         return list(series_map.values())
 
     @staticmethod
