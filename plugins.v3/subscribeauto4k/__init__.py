@@ -210,7 +210,7 @@ class SubscribeAuto4K(_PluginBase):
         "自动追加仅4K规则组收紧订阅，并洗版此前的低分辨率剧集。"
     )
     plugin_icon = "teamwork.png"
-    plugin_version = "2.0.3"
+    plugin_version = "2.0.4"
     plugin_author = "iErics"
     author_url = "https://github.com/iErics"
     plugin_config_prefix = "subscribeauto4k_"
@@ -395,300 +395,308 @@ class SubscribeAuto4K(_PluginBase):
                 "component": "VForm",
                 "content": [
                     {
-                        "component": "VRow",
+                        "component": "VCard",
+                        "props": {"variant": "outlined", "class": "pa-3 mb-3"},
                         "content": [
+                            {"component": "VCardTitle", "props": {"class": "text-subtitle-1 pa-0 pb-2"}, "text": "基础开关"},
+                            {"component": "VDivider", "props": {"class": "mb-2"}},
                             {
-                                "component": "VCol",
-                                "props": {"cols": 12, "md": 3},
+                                "component": "VRow",
+                                "props": {"dense": True},
                                 "content": [
                                     {
-                                        "component": "VSwitch",
-                                        "props": {
-                                            "model": "enabled",
-                                            "label": "启用插件",
-                                        },
-                                    }
-                                ],
-                            },
-                            {
-                                "component": "VCol",
-                                "props": {"cols": 12, "md": 3},
-                                "content": [
+                                        "component": "VCol",
+                                        "props": {"cols": 6, "md": 3},
+                                        "content": [
+                                            {
+                                                "component": "VSwitch",
+                                                "props": {"model": "enabled", "label": "启用插件", "hideDetails": True},
+                                            }
+                                        ],
+                                    },
                                     {
-                                        "component": "VSwitch",
-                                        "props": {
-                                            "model": "dry_run",
-                                            "label": "试运行 (只检测不修改)",
-                                        },
-                                    }
-                                ],
-                            },
-                            {
-                                "component": "VCol",
-                                "props": {"cols": 12, "md": 3},
-                                "content": [
+                                        "component": "VCol",
+                                        "props": {"cols": 6, "md": 3},
+                                        "content": [
+                                            {
+                                                "component": "VSwitch",
+                                                "props": {"model": "dry_run", "label": "试运行模式", "hideDetails": True},
+                                            }
+                                        ],
+                                    },
                                     {
-                                        "component": "VSwitch",
-                                        "props": {
-                                            "model": "onlyonce",
-                                            "label": "立即执行一次",
-                                        },
-                                    }
-                                ],
-                            },
-                            {
-                                "component": "VCol",
-                                "props": {"cols": 12, "md": 3},
-                                "content": [
+                                        "component": "VCol",
+                                        "props": {"cols": 6, "md": 3},
+                                        "content": [
+                                            {
+                                                "component": "VSwitch",
+                                                "props": {"model": "onlyonce", "label": "立即运行一次", "hideDetails": True},
+                                            }
+                                        ],
+                                    },
                                     {
-                                        "component": "VSwitch",
-                                        "props": {
-                                            "model": "notify",
-                                            "label": "变更时发送通知",
-                                        },
-                                    }
+                                        "component": "VCol",
+                                        "props": {"cols": 6, "md": 3},
+                                        "content": [
+                                            {
+                                                "component": "VSwitch",
+                                                "props": {"model": "notify", "label": "变更通知", "hideDetails": True},
+                                            }
+                                        ],
+                                    },
                                 ],
                             },
                         ],
                     },
                     {
-                        "component": "VRow",
+                        "component": "VCard",
+                        "props": {"variant": "outlined", "class": "pa-3 mb-3"},
                         "content": [
+                            {"component": "VCardTitle", "props": {"class": "text-subtitle-1 pa-0 pb-2"}, "text": "4K 收紧与洗版"},
+                            {"component": "VDivider", "props": {"class": "mb-3"}},
                             {
-                                "component": "VCol",
-                                "props": {"cols": 12, "md": 3},
+                                "component": "VRow",
                                 "content": [
                                     {
-                                        "component": "VSelect",
-                                        "props": {
-                                            "model": "strict_group",
-                                            "label": "4K 收紧规则组",
-                                            "items": strict_items,
-                                            "hint": "检测到 4K 后追加到订阅 filter_groups 末尾",
-                                            "persistentHint": True,
-                                        },
-                                    }
+                                        "component": "VCol",
+                                        "props": {"cols": 12, "md": 6},
+                                        "content": [
+                                            {
+                                                "component": "VSelect",
+                                                "props": {
+                                                    "model": "strict_group",
+                                                    "label": "4K 收紧规则组",
+                                                    "items": strict_items,
+                                                    "hideDetails": True,
+                                                },
+                                            }
+                                        ],
+                                    },
+                                    {
+                                        "component": "VCol",
+                                        "props": {"cols": 12, "md": 6},
+                                        "content": [
+                                            {
+                                                "component": "VSelect",
+                                                "props": {
+                                                    "model": "upgrade_mode",
+                                                    "label": "旧集洗版模式",
+                                                    "items": [
+                                                        {"title": "移出低清旧集重下 4K（推荐）", "value": "requeue"},
+                                                        {"title": "原生按集洗版 (best_version)", "value": "best_version"},
+                                                    ],
+                                                    "hideDetails": True,
+                                                },
+                                            }
+                                        ],
+                                    },
                                 ],
                             },
                             {
-                                "component": "VCol",
-                                "props": {"cols": 12, "md": 3},
+                                "component": "VRow",
+                                "props": {"align": "center", "class": "mt-1"},
                                 "content": [
                                     {
-                                        "component": "VSelect",
-                                        "props": {
-                                            "model": "upgrade_mode",
-                                            "label": "旧集洗版模式",
-                                            "items": [
-                                                {"title": "移出已完成集重下4K (推荐)", "value": "requeue"},
-                                                {"title": "开启原生按集洗版 (best_version)", "value": "best_version"},
-                                            ],
-                                            "hint": "requeue 只重下确认非4K旧集，不进入长期洗版循环",
-                                            "persistentHint": True,
-                                        },
-                                    }
-                                ],
-                            },
-                            {
-                                "component": "VCol",
-                                "props": {"cols": 12, "md": 3},
-                                "content": [
+                                        "component": "VCol",
+                                        "props": {"cols": 12, "md": 4},
+                                        "content": [
+                                            {
+                                                "component": "VSwitch",
+                                                "props": {"model": "auto_upgrade", "label": "自动洗版旧集", "hideDetails": True},
+                                            }
+                                        ],
+                                    },
                                     {
-                                        "component": "VTextField",
-                                        "props": {
-                                            "model": "upgrade_priority",
-                                            "label": "洗版优先级阈值 (1-100)",
-                                            "type": "number",
-                                            "hint": "低于该值且未落地4K的集将洗版",
-                                            "persistentHint": True,
-                                        },
-                                    }
-                                ],
-                            },
-                            {
-                                "component": "VCol",
-                                "props": {"cols": 12, "md": 3},
-                                "content": [
+                                        "component": "VCol",
+                                        "props": {"cols": 6, "md": 4},
+                                        "content": [
+                                            {
+                                                "component": "VTextField",
+                                                "props": {
+                                                    "model": "upgrade_priority",
+                                                    "label": "洗版优先级阈值 (1-100)",
+                                                    "type": "number",
+                                                    "placeholder": "95",
+                                                    "hideDetails": True,
+                                                },
+                                            }
+                                        ],
+                                    },
                                     {
-                                        "component": "VTextField",
-                                        "props": {
-                                            "model": "upgrade_max_episodes",
-                                            "label": "单剧最多洗版集数 (0=不限)",
-                                            "type": "number",
-                                            "hint": "优先洗版最新 N 集，防止长篇年番一次重下上百集",
-                                            "persistentHint": True,
-                                        },
-                                    }
+                                        "component": "VCol",
+                                        "props": {"cols": 6, "md": 4},
+                                        "content": [
+                                            {
+                                                "component": "VTextField",
+                                                "props": {
+                                                    "model": "upgrade_max_episodes",
+                                                    "label": "单剧累计洗版上限 (0=不限)",
+                                                    "type": "number",
+                                                    "placeholder": "20",
+                                                    "hideDetails": True,
+                                                },
+                                            }
+                                        ],
+                                    },
                                 ],
                             },
                         ],
                     },
                     {
-                        "component": "VRow",
+                        "component": "VCard",
+                        "props": {"variant": "outlined", "class": "pa-3 mb-3"},
                         "content": [
+                            {"component": "VCardTitle", "props": {"class": "text-subtitle-1 pa-0 pb-2"}, "text": "探测与定时"},
+                            {"component": "VDivider", "props": {"class": "mb-2"}},
                             {
-                                "component": "VCol",
-                                "props": {"cols": 12, "md": 3},
+                                "component": "VRow",
+                                "props": {"dense": True},
                                 "content": [
                                     {
-                                        "component": "VSwitch",
-                                        "props": {
-                                            "model": "auto_upgrade",
-                                            "label": "自动洗版低分辨率旧集",
-                                        },
-                                    }
+                                        "component": "VCol",
+                                        "props": {"cols": 12, "md": 4},
+                                        "content": [
+                                            {
+                                                "component": "VSwitch",
+                                                "props": {"model": "enable_event_watch", "label": "监听实时事件", "hideDetails": True},
+                                            }
+                                        ],
+                                    },
+                                    {
+                                        "component": "VCol",
+                                        "props": {"cols": 12, "md": 4},
+                                        "content": [
+                                            {
+                                                "component": "VSwitch",
+                                                "props": {"model": "enable_active_search", "label": "主动搜站探查", "hideDetails": True},
+                                            }
+                                        ],
+                                    },
+                                    {
+                                        "component": "VCol",
+                                        "props": {"cols": 12, "md": 4},
+                                        "content": [
+                                            {
+                                                "component": "VSwitch",
+                                                "props": {"model": "include_movie", "label": "包含电影订阅", "hideDetails": True},
+                                            }
+                                        ],
+                                    },
                                 ],
                             },
                             {
-                                "component": "VCol",
-                                "props": {"cols": 12, "md": 3},
+                                "component": "VRow",
+                                "props": {"class": "mt-1"},
                                 "content": [
                                     {
-                                        "component": "VSwitch",
-                                        "props": {
-                                            "model": "enable_event_watch",
-                                            "label": "实时监听下载/整理事件",
-                                        },
-                                    }
-                                ],
-                            },
-                            {
-                                "component": "VCol",
-                                "props": {"cols": 12, "md": 3},
-                                "content": [
+                                        "component": "VCol",
+                                        "props": {"cols": 12, "md": 4},
+                                        "content": [
+                                            {
+                                                "component": "VCronField",
+                                                "props": {
+                                                    "model": "scan_cron",
+                                                    "label": "定时同步周期 (Cron)",
+                                                    "placeholder": "*/30 * * * *",
+                                                    "hideDetails": True,
+                                                },
+                                            }
+                                        ],
+                                    },
                                     {
-                                        "component": "VSwitch",
-                                        "props": {
-                                            "model": "enable_active_search",
-                                            "label": "允许受控主动搜站探查",
-                                        },
-                                    }
-                                ],
-                            },
-                            {
-                                "component": "VCol",
-                                "props": {"cols": 12, "md": 3},
-                                "content": [
+                                        "component": "VCol",
+                                        "props": {"cols": 6, "md": 4},
+                                        "content": [
+                                            {
+                                                "component": "VTextField",
+                                                "props": {
+                                                    "model": "check_ttl_hours",
+                                                    "label": "搜站冷却 (小时)",
+                                                    "type": "number",
+                                                    "placeholder": "6",
+                                                    "hideDetails": True,
+                                                },
+                                            }
+                                        ],
+                                    },
                                     {
-                                        "component": "VSwitch",
-                                        "props": {
-                                            "model": "include_movie",
-                                            "label": "包含电影订阅",
-                                        },
-                                    }
+                                        "component": "VCol",
+                                        "props": {"cols": 6, "md": 4},
+                                        "content": [
+                                            {
+                                                "component": "VTextField",
+                                                "props": {
+                                                    "model": "batch_limit",
+                                                    "label": "单轮搜站上限",
+                                                    "type": "number",
+                                                    "placeholder": "10",
+                                                    "hideDetails": True,
+                                                },
+                                            }
+                                        ],
+                                    },
                                 ],
                             },
                         ],
                     },
                     {
-                        "component": "VRow",
+                        "component": "VCard",
+                        "props": {"variant": "outlined", "class": "pa-3 mb-3"},
                         "content": [
+                            {"component": "VCardTitle", "props": {"class": "text-subtitle-1 pa-0 pb-2"}, "text": "排除过滤"},
+                            {"component": "VDivider", "props": {"class": "mb-3"}},
                             {
-                                "component": "VCol",
-                                "props": {"cols": 12, "md": 4},
+                                "component": "VRow",
                                 "content": [
                                     {
-                                        "component": "VCronField",
-                                        "props": {
-                                            "model": "scan_cron",
-                                            "label": "定时同步周期 (Cron)",
-                                            "placeholder": "*/30 * * * *",
-                                        },
-                                    }
-                                ],
-                            },
-                            {
-                                "component": "VCol",
-                                "props": {"cols": 12, "md": 4},
-                                "content": [
+                                        "component": "VCol",
+                                        "props": {"cols": 12, "md": 6},
+                                        "content": [
+                                            {
+                                                "component": "VSelect",
+                                                "props": {
+                                                    "model": "exclude_groups",
+                                                    "label": "排除规则组",
+                                                    "items": group_names,
+                                                    "multiple": True,
+                                                    "chips": True,
+                                                    "clearable": True,
+                                                    "hideDetails": True,
+                                                },
+                                            }
+                                        ],
+                                    },
                                     {
-                                        "component": "VTextField",
-                                        "props": {
-                                            "model": "check_ttl_hours",
-                                            "label": "主动搜站冷却时间 (小时)",
-                                            "type": "number",
-                                            "hint": "同一订阅在冷却期内不重复触发外站主动搜索",
-                                            "persistentHint": True,
-                                        },
-                                    }
-                                ],
-                            },
-                            {
-                                "component": "VCol",
-                                "props": {"cols": 12, "md": 4},
-                                "content": [
-                                    {
-                                        "component": "VTextField",
-                                        "props": {
-                                            "model": "batch_limit",
-                                            "label": "单轮主动搜站上限",
-                                            "type": "number",
-                                            "hint": "限制每轮外站搜索的订阅数，避免高频请求 PT 站",
-                                            "persistentHint": True,
-                                        },
-                                    }
+                                        "component": "VCol",
+                                        "props": {"cols": 12, "md": 6},
+                                        "content": [
+                                            {
+                                                "component": "VTextField",
+                                                "props": {
+                                                    "model": "exclude_keywords",
+                                                    "label": "排除标题关键词",
+                                                    "placeholder": "逗号分隔，如：短剧, 预告片",
+                                                    "clearable": True,
+                                                    "hideDetails": True,
+                                                },
+                                            }
+                                        ],
+                                    },
                                 ],
                             },
                         ],
                     },
                     {
-                        "component": "VRow",
-                        "content": [
-                            {
-                                "component": "VCol",
-                                "props": {"cols": 12, "md": 6},
-                                "content": [
-                                    {
-                                        "component": "VSelect",
-                                        "props": {
-                                            "model": "exclude_groups",
-                                            "label": "排除规则组 (命中则跳过)",
-                                            "items": group_names,
-                                            "multiple": True,
-                                            "chips": True,
-                                            "clearable": True,
-                                        },
-                                    }
-                                ],
-                            },
-                            {
-                                "component": "VCol",
-                                "props": {"cols": 12, "md": 6},
-                                "content": [
-                                    {
-                                        "component": "VTextarea",
-                                        "props": {
-                                            "model": "exclude_keywords",
-                                            "label": "排除标题关键词 (换行或逗号分隔)",
-                                            "rows": 2,
-                                            "placeholder": "如：短剧, 预告片",
-                                        },
-                                    }
-                                ],
-                            },
-                        ],
-                    },
-                    {
-                        "component": "VRow",
-                        "content": [
-                            {
-                                "component": "VCol",
-                                "props": {"cols": 12},
-                                "content": [
-                                    {
-                                        "component": "VAlert",
-                                        "props": {
-                                            "type": "info",
-                                            "variant": "tonal",
-                                            "text": (
-                                                "工作策略：先通过实时事件、整理历史与本地种子缓存做零请求检测，"
-                                                "再按冷却时间与单轮上限做受控搜站。收紧前会自动保存原规则组与进度快照，支持随时回滚。"
-                                            ),
-                                        },
-                                    }
-                                ],
-                            }
-                        ],
+                        "component": "VAlert",
+                        "props": {
+                            "type": "info",
+                            "variant": "tonal",
+                            "density": "compact",
+                            "text": (
+                                "优先按「实时事件 → 整理历史 → 本地种子缓存」零请求识别 4K，未命中再按冷却与上限主动探查；"
+                                "收紧时自动保留「免费/前置过滤」并存快照支持随时回滚。"
+                            ),
+                        },
                     },
                 ],
             }
@@ -715,8 +723,28 @@ class SubscribeAuto4K(_PluginBase):
         }
         return form, defaults
 
+    @staticmethod
+    def _format_episode_summary(eps: List[int]) -> str:
+        """将剧集列表压缩为易读区间文本（如 'E01-E05, E09'），避免表格被长数组撑乱。"""
+        nums = sorted({int(e) for e in eps if str(e).isdigit()})
+        if not nums:
+            return "-"
+        ranges: List[str] = []
+        start = prev = nums[0]
+        for cur in nums[1:]:
+            if cur == prev + 1:
+                prev = cur
+            else:
+                ranges.append(f"E{start:02d}" if start == prev else f"E{start:02d}-E{prev:02d}")
+                start = prev = cur
+        ranges.append(f"E{start:02d}" if start == prev else f"E{start:02d}-E{prev:02d}")
+        joined = ", ".join(ranges)
+        if len(ranges) > 4:
+            return f"{len(nums)}集 ({', '.join(ranges[:3])}…)"
+        return joined
+
     def get_page(self) -> List[dict]:
-        """渲染运行状态摘要与最近处理明细表。"""
+        """渲染卡片化状态看板与精简处理明细表。"""
         checked = self._load_checked()
         history = self._load_history()
         last_run = self.get_data("last_run") or {}
@@ -724,32 +752,61 @@ class SubscribeAuto4K(_PluginBase):
 
         tightened_count = sum(1 for item in checked.values() if isinstance(item, dict) and item.get("tightened"))
         total_checked = len(checked)
-        last_time = last_run.get("time") or "尚未运行"
-        last_summary = (
-            f"扫描 {last_run.get('scanned', 0)} 条 | "
-            f"本地命中 {last_run.get('local_hits', 0)} | "
-            f"主动搜站 {last_run.get('search_calls', 0)} | "
-            f"新收紧 {last_run.get('tightened', 0)} | "
-            f"触发洗版 {last_run.get('upgraded_episodes', 0)} 集"
-            + (" [试运行]" if last_run.get("dry_run") else "")
-            if last_run
-            else "暂无扫描记录"
-        )
+        last_time = str(last_run.get("time") or "尚未运行")
+        if len(last_time) >= 16:
+            last_time = last_time[5:16]
+
+        source_labels = {
+            "transfer_history": "整理历史",
+            "torrent_cache": "种子缓存",
+            "active_search": "主动搜站",
+            "event:transfer": "实时整理",
+            "event:download": "实时下载",
+            "already_strict": "已收紧补检",
+            "api:restore": "快照恢复",
+        }
+
+        def _action_color(action_text: str) -> str:
+            if "试运行" in action_text:
+                return "warning"
+            if "恢复" in action_text or "回滚" in action_text:
+                return "secondary"
+            if "补洗版" in action_text:
+                return "info"
+            return "success"
 
         rows = []
-        for entry in history[:40]:
+        for entry in history[:30]:
             eps = entry.get("upgraded_episodes") or []
-            eps_text = ", ".join(f"E{e:02d}" for e in eps) if eps else "-"
+            eps_text = self._format_episode_summary(eps)
+            raw_time = str(entry.get("time") or "-")
+            short_time = raw_time[5:16] if len(raw_time) >= 16 else raw_time
+            raw_src = str(entry.get("source") or "-")
+            src_label = source_labels.get(raw_src, raw_src)
+            action_text = str(entry.get("action") or "-")
             rows.append(
                 {
                     "component": "tr",
                     "content": [
-                        {"component": "td", "text": str(entry.get("time") or "-")},
-                        {"component": "td", "text": str(entry.get("title") or "-")},
-                        {"component": "td", "text": str(entry.get("source") or "-")},
-                        {"component": "td", "text": str(entry.get("action") or "-")},
-                        {"component": "td", "text": eps_text},
-                        {"component": "td", "text": str(entry.get("detail") or "")},
+                        {"component": "td", "props": {"class": "text-no-wrap text-caption"}, "text": short_time},
+                        {"component": "td", "props": {"class": "font-weight-medium"}, "text": str(entry.get("title") or "-")},
+                        {"component": "td", "props": {"class": "text-no-wrap"}, "text": src_label},
+                        {
+                            "component": "td",
+                            "props": {"class": "text-no-wrap"},
+                            "content": [
+                                {
+                                    "component": "VChip",
+                                    "props": {
+                                        "size": "x-small",
+                                        "variant": "tonal",
+                                        "color": _action_color(action_text),
+                                    },
+                                    "text": action_text,
+                                }
+                            ],
+                        },
+                        {"component": "td", "props": {"class": "text-caption"}, "text": eps_text},
                     ],
                 }
             )
@@ -761,124 +818,78 @@ class SubscribeAuto4K(_PluginBase):
                     "content": [
                         {
                             "component": "td",
-                            "props": {"colspan": 6, "class": "text-center text-medium-emphasis"},
+                            "props": {"colspan": 5, "class": "text-center text-medium-emphasis py-4"},
                             "text": "暂无 4K 收紧或洗版记录",
                         }
                     ],
                 }
             )
 
+        def _metric_card(label: str, value: str, subtext: str) -> dict:
+            return {
+                "component": "VCol",
+                "props": {"cols": 6, "md": 3},
+                "content": [
+                    {
+                        "component": "VCard",
+                        "props": {"variant": "outlined", "class": "pa-3"},
+                        "content": [
+                            {"component": "div", "props": {"class": "text-caption text-medium-emphasis"}, "text": label},
+                            {"component": "div", "props": {"class": "text-h6 font-weight-bold mt-1"}, "text": value},
+                            {"component": "div", "props": {"class": "text-caption text-medium-emphasis mt-1"}, "text": subtext},
+                        ],
+                    }
+                ],
+            }
+
+        last_sub = (
+            f"命中 {last_run.get('local_hits', 0)} · 搜站 {last_run.get('search_calls', 0)} · 洗版 {last_run.get('upgraded_episodes', 0)} 集"
+            if last_run
+            else "等待首次执行"
+        )
+
         return [
             {
                 "component": "VRow",
+                "props": {"dense": True},
                 "content": [
-                    {
-                        "component": "VCol",
-                        "props": {"cols": 12, "md": 4},
-                        "content": [
-                            {
-                                "component": "VCard",
-                                "props": {"variant": "tonal"},
-                                "content": [
-                                    {
-                                        "component": "VCardText",
-                                        "content": [
-                                            {"component": "div", "props": {"class": "text-caption"}, "text": "已跟踪 / 已收紧 4K"},
-                                            {
-                                                "component": "div",
-                                                "props": {"class": "text-h6 mt-1"},
-                                                "text": f"{total_checked} / {tightened_count} 条",
-                                            },
-                                        ],
-                                    }
-                                ],
-                            }
-                        ],
-                    },
-                    {
-                        "component": "VCol",
-                        "props": {"cols": 12, "md": 4},
-                        "content": [
-                            {
-                                "component": "VCard",
-                                "props": {"variant": "tonal"},
-                                "content": [
-                                    {
-                                        "component": "VCardText",
-                                        "content": [
-                                            {"component": "div", "props": {"class": "text-caption"}, "text": "已保存回滚快照"},
-                                            {
-                                                "component": "div",
-                                                "props": {"class": "text-h6 mt-1"},
-                                                "text": f"{len(snapshots)} 条",
-                                            },
-                                        ],
-                                    }
-                                ],
-                            }
-                        ],
-                    },
-                    {
-                        "component": "VCol",
-                        "props": {"cols": 12, "md": 4},
-                        "content": [
-                            {
-                                "component": "VCard",
-                                "props": {"variant": "tonal"},
-                                "content": [
-                                    {
-                                        "component": "VCardText",
-                                        "content": [
-                                            {"component": "div", "props": {"class": "text-caption"}, "text": f"最近扫描 ({last_time})"},
-                                            {
-                                                "component": "div",
-                                                "props": {"class": "text-body-2 mt-1"},
-                                                "text": last_summary,
-                                            },
-                                        ],
-                                    }
-                                ],
-                            }
-                        ],
-                    },
+                    _metric_card("已跟踪订阅", f"{total_checked}", "当前纳入监控"),
+                    _metric_card("已收紧仅 4K", f"{tightened_count}", f"规则组：{self._strict_group}"),
+                    _metric_card("回滚快照", f"{len(snapshots)}", "支持一键恢复"),
+                    _metric_card("最近扫描", last_time, last_sub),
                 ],
             },
             {
-                "component": "VRow",
-                "props": {"class": "mt-2"},
+                "component": "VCard",
+                "props": {"variant": "outlined", "class": "pa-3 mt-3"},
                 "content": [
+                    {"component": "VCardTitle", "props": {"class": "text-subtitle-1 pa-0 pb-2"}, "text": "最近处理记录"},
+                    {"component": "VDivider", "props": {"class": "mb-2"}},
                     {
-                        "component": "VCol",
-                        "props": {"cols": 12},
+                        "component": "VTable",
+                        "props": {"hover": True, "density": "compact"},
                         "content": [
                             {
-                                "component": "VTable",
-                                "props": {"hover": True, "density": "compact"},
+                                "component": "thead",
                                 "content": [
                                     {
-                                        "component": "thead",
+                                        "component": "tr",
                                         "content": [
-                                            {
-                                                "component": "tr",
-                                                "content": [
-                                                    {"component": "th", "text": "时间"},
-                                                    {"component": "th", "text": "订阅"},
-                                                    {"component": "th", "text": "4K 信号来源"},
-                                                    {"component": "th", "text": "动作"},
-                                                    {"component": "th", "text": "洗版剧集"},
-                                                    {"component": "th", "text": "说明"},
-                                                ],
-                                            }
+                                            {"component": "th", "text": "时间"},
+                                            {"component": "th", "text": "订阅"},
+                                            {"component": "th", "text": "信号来源"},
+                                            {"component": "th", "text": "动作"},
+                                            {"component": "th", "text": "洗版剧集"},
                                         ],
-                                    },
-                                    {
-                                        "component": "tbody",
-                                        "content": rows,
-                                    },
+                                    }
                                 ],
-                            }
+                            },
+                            {
+                                "component": "tbody",
+                                "content": rows,
+                            },
                         ],
-                    }
+                    },
                 ],
             },
         ]
