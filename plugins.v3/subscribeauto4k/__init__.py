@@ -210,7 +210,7 @@ class SubscribeAuto4K(_PluginBase):
         "自动追加仅4K规则组收紧订阅，并洗版此前的低分辨率剧集。"
     )
     plugin_icon = "teamwork.png"
-    plugin_version = "2.0.4"
+    plugin_version = "2.0.5"
     plugin_author = "iErics"
     author_url = "https://github.com/iErics"
     plugin_config_prefix = "subscribeauto4k_"
@@ -395,308 +395,383 @@ class SubscribeAuto4K(_PluginBase):
                 "component": "VForm",
                 "content": [
                     {
-                        "component": "VCard",
-                        "props": {"variant": "outlined", "class": "pa-3 mb-3"},
-                        "content": [
-                            {"component": "VCardTitle", "props": {"class": "text-subtitle-1 pa-0 pb-2"}, "text": "基础开关"},
-                            {"component": "VDivider", "props": {"class": "mb-2"}},
-                            {
-                                "component": "VRow",
-                                "props": {"dense": True},
-                                "content": [
-                                    {
-                                        "component": "VCol",
-                                        "props": {"cols": 6, "md": 3},
-                                        "content": [
-                                            {
-                                                "component": "VSwitch",
-                                                "props": {"model": "enabled", "label": "启用插件", "hideDetails": True},
-                                            }
-                                        ],
-                                    },
-                                    {
-                                        "component": "VCol",
-                                        "props": {"cols": 6, "md": 3},
-                                        "content": [
-                                            {
-                                                "component": "VSwitch",
-                                                "props": {"model": "dry_run", "label": "试运行模式", "hideDetails": True},
-                                            }
-                                        ],
-                                    },
-                                    {
-                                        "component": "VCol",
-                                        "props": {"cols": 6, "md": 3},
-                                        "content": [
-                                            {
-                                                "component": "VSwitch",
-                                                "props": {"model": "onlyonce", "label": "立即运行一次", "hideDetails": True},
-                                            }
-                                        ],
-                                    },
-                                    {
-                                        "component": "VCol",
-                                        "props": {"cols": 6, "md": 3},
-                                        "content": [
-                                            {
-                                                "component": "VSwitch",
-                                                "props": {"model": "notify", "label": "变更通知", "hideDetails": True},
-                                            }
-                                        ],
-                                    },
-                                ],
-                            },
-                        ],
-                    },
-                    {
-                        "component": "VCard",
-                        "props": {"variant": "outlined", "class": "pa-3 mb-3"},
-                        "content": [
-                            {"component": "VCardTitle", "props": {"class": "text-subtitle-1 pa-0 pb-2"}, "text": "4K 收紧与洗版"},
-                            {"component": "VDivider", "props": {"class": "mb-3"}},
-                            {
-                                "component": "VRow",
-                                "content": [
-                                    {
-                                        "component": "VCol",
-                                        "props": {"cols": 12, "md": 6},
-                                        "content": [
-                                            {
-                                                "component": "VSelect",
-                                                "props": {
-                                                    "model": "strict_group",
-                                                    "label": "4K 收紧规则组",
-                                                    "items": strict_items,
-                                                    "hideDetails": True,
-                                                },
-                                            }
-                                        ],
-                                    },
-                                    {
-                                        "component": "VCol",
-                                        "props": {"cols": 12, "md": 6},
-                                        "content": [
-                                            {
-                                                "component": "VSelect",
-                                                "props": {
-                                                    "model": "upgrade_mode",
-                                                    "label": "旧集洗版模式",
-                                                    "items": [
-                                                        {"title": "移出低清旧集重下 4K（推荐）", "value": "requeue"},
-                                                        {"title": "原生按集洗版 (best_version)", "value": "best_version"},
-                                                    ],
-                                                    "hideDetails": True,
-                                                },
-                                            }
-                                        ],
-                                    },
-                                ],
-                            },
-                            {
-                                "component": "VRow",
-                                "props": {"align": "center", "class": "mt-1"},
-                                "content": [
-                                    {
-                                        "component": "VCol",
-                                        "props": {"cols": 12, "md": 4},
-                                        "content": [
-                                            {
-                                                "component": "VSwitch",
-                                                "props": {"model": "auto_upgrade", "label": "自动洗版旧集", "hideDetails": True},
-                                            }
-                                        ],
-                                    },
-                                    {
-                                        "component": "VCol",
-                                        "props": {"cols": 6, "md": 4},
-                                        "content": [
-                                            {
-                                                "component": "VTextField",
-                                                "props": {
-                                                    "model": "upgrade_priority",
-                                                    "label": "洗版优先级阈值 (1-100)",
-                                                    "type": "number",
-                                                    "placeholder": "95",
-                                                    "hideDetails": True,
-                                                },
-                                            }
-                                        ],
-                                    },
-                                    {
-                                        "component": "VCol",
-                                        "props": {"cols": 6, "md": 4},
-                                        "content": [
-                                            {
-                                                "component": "VTextField",
-                                                "props": {
-                                                    "model": "upgrade_max_episodes",
-                                                    "label": "单剧累计洗版上限 (0=不限)",
-                                                    "type": "number",
-                                                    "placeholder": "20",
-                                                    "hideDetails": True,
-                                                },
-                                            }
-                                        ],
-                                    },
-                                ],
-                            },
-                        ],
-                    },
-                    {
-                        "component": "VCard",
-                        "props": {"variant": "outlined", "class": "pa-3 mb-3"},
-                        "content": [
-                            {"component": "VCardTitle", "props": {"class": "text-subtitle-1 pa-0 pb-2"}, "text": "探测与定时"},
-                            {"component": "VDivider", "props": {"class": "mb-2"}},
-                            {
-                                "component": "VRow",
-                                "props": {"dense": True},
-                                "content": [
-                                    {
-                                        "component": "VCol",
-                                        "props": {"cols": 12, "md": 4},
-                                        "content": [
-                                            {
-                                                "component": "VSwitch",
-                                                "props": {"model": "enable_event_watch", "label": "监听实时事件", "hideDetails": True},
-                                            }
-                                        ],
-                                    },
-                                    {
-                                        "component": "VCol",
-                                        "props": {"cols": 12, "md": 4},
-                                        "content": [
-                                            {
-                                                "component": "VSwitch",
-                                                "props": {"model": "enable_active_search", "label": "主动搜站探查", "hideDetails": True},
-                                            }
-                                        ],
-                                    },
-                                    {
-                                        "component": "VCol",
-                                        "props": {"cols": 12, "md": 4},
-                                        "content": [
-                                            {
-                                                "component": "VSwitch",
-                                                "props": {"model": "include_movie", "label": "包含电影订阅", "hideDetails": True},
-                                            }
-                                        ],
-                                    },
-                                ],
-                            },
-                            {
-                                "component": "VRow",
-                                "props": {"class": "mt-1"},
-                                "content": [
-                                    {
-                                        "component": "VCol",
-                                        "props": {"cols": 12, "md": 4},
-                                        "content": [
-                                            {
-                                                "component": "VCronField",
-                                                "props": {
-                                                    "model": "scan_cron",
-                                                    "label": "定时同步周期 (Cron)",
-                                                    "placeholder": "*/30 * * * *",
-                                                    "hideDetails": True,
-                                                },
-                                            }
-                                        ],
-                                    },
-                                    {
-                                        "component": "VCol",
-                                        "props": {"cols": 6, "md": 4},
-                                        "content": [
-                                            {
-                                                "component": "VTextField",
-                                                "props": {
-                                                    "model": "check_ttl_hours",
-                                                    "label": "搜站冷却 (小时)",
-                                                    "type": "number",
-                                                    "placeholder": "6",
-                                                    "hideDetails": True,
-                                                },
-                                            }
-                                        ],
-                                    },
-                                    {
-                                        "component": "VCol",
-                                        "props": {"cols": 6, "md": 4},
-                                        "content": [
-                                            {
-                                                "component": "VTextField",
-                                                "props": {
-                                                    "model": "batch_limit",
-                                                    "label": "单轮搜站上限",
-                                                    "type": "number",
-                                                    "placeholder": "10",
-                                                    "hideDetails": True,
-                                                },
-                                            }
-                                        ],
-                                    },
-                                ],
-                            },
-                        ],
-                    },
-                    {
-                        "component": "VCard",
-                        "props": {"variant": "outlined", "class": "pa-3 mb-3"},
-                        "content": [
-                            {"component": "VCardTitle", "props": {"class": "text-subtitle-1 pa-0 pb-2"}, "text": "排除过滤"},
-                            {"component": "VDivider", "props": {"class": "mb-3"}},
-                            {
-                                "component": "VRow",
-                                "content": [
-                                    {
-                                        "component": "VCol",
-                                        "props": {"cols": 12, "md": 6},
-                                        "content": [
-                                            {
-                                                "component": "VSelect",
-                                                "props": {
-                                                    "model": "exclude_groups",
-                                                    "label": "排除规则组",
-                                                    "items": group_names,
-                                                    "multiple": True,
-                                                    "chips": True,
-                                                    "clearable": True,
-                                                    "hideDetails": True,
-                                                },
-                                            }
-                                        ],
-                                    },
-                                    {
-                                        "component": "VCol",
-                                        "props": {"cols": 12, "md": 6},
-                                        "content": [
-                                            {
-                                                "component": "VTextField",
-                                                "props": {
-                                                    "model": "exclude_keywords",
-                                                    "label": "排除标题关键词",
-                                                    "placeholder": "逗号分隔，如：短剧, 预告片",
-                                                    "clearable": True,
-                                                    "hideDetails": True,
-                                                },
-                                            }
-                                        ],
-                                    },
-                                ],
-                            },
-                        ],
-                    },
-                    {
-                        "component": "VAlert",
+                        "component": "VSheet",
                         "props": {
-                            "type": "info",
-                            "variant": "tonal",
-                            "density": "compact",
-                            "text": (
-                                "优先按「实时事件 → 整理历史 → 本地种子缓存」零请求识别 4K，未命中再按冷却与上限主动探查；"
-                                "收紧时自动保留「免费/前置过滤」并存快照支持随时回滚。"
-                            ),
+                            "rounded": "lg",
+                            "class": "px-4 py-2 mb-5",
+                            "style": "background: rgba(255, 255, 255, 0.04); border: 1px solid rgba(255, 255, 255, 0.08);",
                         },
+                        "content": [
+                            {
+                                "component": "VRow",
+                                "props": {"dense": True, "align": "center"},
+                                "content": [
+                                    {
+                                        "component": "VCol",
+                                        "props": {"cols": 12, "sm": 4},
+                                        "content": [
+                                            {
+                                                "component": "VSwitch",
+                                                "props": {
+                                                    "model": "enabled",
+                                                    "label": "启用插件",
+                                                    "color": "primary",
+                                                    "hideDetails": True,
+                                                },
+                                            }
+                                        ],
+                                    },
+                                    {
+                                        "component": "VCol",
+                                        "props": {"cols": 12, "sm": 4},
+                                        "content": [
+                                            {
+                                                "component": "VSwitch",
+                                                "props": {
+                                                    "model": "auto_upgrade",
+                                                    "label": "自动洗版旧集",
+                                                    "color": "primary",
+                                                    "hideDetails": True,
+                                                },
+                                            }
+                                        ],
+                                    },
+                                    {
+                                        "component": "VCol",
+                                        "props": {"cols": 12, "sm": 4},
+                                        "content": [
+                                            {
+                                                "component": "VSwitch",
+                                                "props": {
+                                                    "model": "onlyonce",
+                                                    "label": "立即运行一次",
+                                                    "color": "primary",
+                                                    "hideDetails": True,
+                                                },
+                                            }
+                                        ],
+                                    },
+                                ],
+                            }
+                        ],
+                    },
+                    {
+                        "component": "VRow",
+                        "content": [
+                            {
+                                "component": "VCol",
+                                "props": {"cols": 12, "md": 6},
+                                "content": [
+                                    {
+                                        "component": "VSelect",
+                                        "props": {
+                                            "model": "strict_group",
+                                            "label": "4K 收紧规则组",
+                                            "items": strict_items,
+                                            "density": "comfortable",
+                                            "hideDetails": True,
+                                        },
+                                    }
+                                ],
+                            },
+                            {
+                                "component": "VCol",
+                                "props": {"cols": 12, "md": 6},
+                                "content": [
+                                    {
+                                        "component": "VCronField",
+                                        "props": {
+                                            "model": "scan_cron",
+                                            "label": "定时同步周期 (Cron)",
+                                            "placeholder": "*/30 * * * *",
+                                            "density": "comfortable",
+                                            "hideDetails": True,
+                                        },
+                                    }
+                                ],
+                            },
+                        ],
+                    },
+                    {
+                        "component": "VRow",
+                        "props": {"show": "{{ Boolean(model.auto_upgrade) }}", "class": "mt-1"},
+                        "content": [
+                            {
+                                "component": "VCol",
+                                "props": {"cols": 12, "md": 6},
+                                "content": [
+                                    {
+                                        "component": "VSelect",
+                                        "props": {
+                                            "model": "upgrade_mode",
+                                            "label": "旧集洗版模式",
+                                            "items": [
+                                                {"title": "移出低清旧集重下 4K（推荐）", "value": "requeue"},
+                                                {"title": "原生按集洗版 (best_version)", "value": "best_version"},
+                                            ],
+                                            "density": "comfortable",
+                                            "hideDetails": True,
+                                        },
+                                    }
+                                ],
+                            },
+                            {
+                                "component": "VCol",
+                                "props": {"cols": 12, "md": 6},
+                                "content": [
+                                    {
+                                        "component": "VTextField",
+                                        "props": {
+                                            "model": "upgrade_max_episodes",
+                                            "label": "单剧累计洗版上限",
+                                            "type": "number",
+                                            "suffix": "集",
+                                            "placeholder": "0 表示不限",
+                                            "density": "comfortable",
+                                            "hideDetails": True,
+                                        },
+                                    }
+                                ],
+                            },
+                        ],
+                    },
+                    {
+                        "component": "VExpansionPanels",
+                        "props": {
+                            "variant": "accordion",
+                            "class": "mt-5",
+                        },
+                        "content": [
+                            {
+                                "component": "VExpansionPanel",
+                                "props": {
+                                    "value": "detect",
+                                    "style": "background: rgba(255, 255, 255, 0.03);",
+                                },
+                                "content": [
+                                    {
+                                        "component": "VExpansionPanelTitle",
+                                        "props": {"class": "text-body-2 font-weight-medium"},
+                                        "text": "探测与主动搜站",
+                                    },
+                                    {
+                                        "component": "VExpansionPanelText",
+                                        "content": [
+                                            {
+                                                "component": "VRow",
+                                                "props": {"dense": True},
+                                                "content": [
+                                                    {
+                                                        "component": "VCol",
+                                                        "props": {"cols": 12, "sm": 4},
+                                                        "content": [
+                                                            {
+                                                                "component": "VSwitch",
+                                                                "props": {
+                                                                    "model": "enable_event_watch",
+                                                                    "label": "监听实时 4K 事件",
+                                                                    "hideDetails": True,
+                                                                },
+                                                            }
+                                                        ],
+                                                    },
+                                                    {
+                                                        "component": "VCol",
+                                                        "props": {"cols": 12, "sm": 4},
+                                                        "content": [
+                                                            {
+                                                                "component": "VSwitch",
+                                                                "props": {
+                                                                    "model": "enable_active_search",
+                                                                    "label": "允许主动搜站",
+                                                                    "hideDetails": True,
+                                                                },
+                                                            }
+                                                        ],
+                                                    },
+                                                    {
+                                                        "component": "VCol",
+                                                        "props": {"cols": 12, "sm": 4},
+                                                        "content": [
+                                                            {
+                                                                "component": "VSwitch",
+                                                                "props": {
+                                                                    "model": "include_movie",
+                                                                    "label": "包含电影订阅",
+                                                                    "hideDetails": True,
+                                                                },
+                                                            }
+                                                        ],
+                                                    },
+                                                ],
+                                            },
+                                            {
+                                                "component": "VRow",
+                                                "props": {
+                                                    "show": "{{ Boolean(model.enable_active_search) }}",
+                                                    "class": "mt-2",
+                                                },
+                                                "content": [
+                                                    {
+                                                        "component": "VCol",
+                                                        "props": {"cols": 12, "md": 6},
+                                                        "content": [
+                                                            {
+                                                                "component": "VTextField",
+                                                                "props": {
+                                                                    "model": "check_ttl_hours",
+                                                                    "label": "搜站冷却时间",
+                                                                    "type": "number",
+                                                                    "suffix": "小时",
+                                                                    "density": "comfortable",
+                                                                    "hideDetails": True,
+                                                                },
+                                                            }
+                                                        ],
+                                                    },
+                                                    {
+                                                        "component": "VCol",
+                                                        "props": {"cols": 12, "md": 6},
+                                                        "content": [
+                                                            {
+                                                                "component": "VTextField",
+                                                                "props": {
+                                                                    "model": "batch_limit",
+                                                                    "label": "单轮搜站上限",
+                                                                    "type": "number",
+                                                                    "suffix": "条",
+                                                                    "density": "comfortable",
+                                                                    "hideDetails": True,
+                                                                },
+                                                            }
+                                                        ],
+                                                    },
+                                                ],
+                                            },
+                                        ],
+                                    },
+                                ],
+                            },
+                            {
+                                "component": "VExpansionPanel",
+                                "props": {
+                                    "value": "advanced",
+                                    "style": "background: rgba(255, 255, 255, 0.03);",
+                                },
+                                "content": [
+                                    {
+                                        "component": "VExpansionPanelTitle",
+                                        "props": {"class": "text-body-2 font-weight-medium"},
+                                        "text": "排除过滤与高级选项",
+                                    },
+                                    {
+                                        "component": "VExpansionPanelText",
+                                        "content": [
+                                            {
+                                                "component": "VRow",
+                                                "props": {"dense": True},
+                                                "content": [
+                                                    {
+                                                        "component": "VCol",
+                                                        "props": {"cols": 12, "sm": 6},
+                                                        "content": [
+                                                            {
+                                                                "component": "VSwitch",
+                                                                "props": {
+                                                                    "model": "dry_run",
+                                                                    "label": "试运行（仅检测不修改）",
+                                                                    "hideDetails": True,
+                                                                },
+                                                            }
+                                                        ],
+                                                    },
+                                                    {
+                                                        "component": "VCol",
+                                                        "props": {"cols": 12, "sm": 6},
+                                                        "content": [
+                                                            {
+                                                                "component": "VSwitch",
+                                                                "props": {
+                                                                    "model": "notify",
+                                                                    "label": "变更时发送通知",
+                                                                    "hideDetails": True,
+                                                                },
+                                                            }
+                                                        ],
+                                                    },
+                                                ],
+                                            },
+                                            {
+                                                "component": "VRow",
+                                                "props": {"class": "mt-2"},
+                                                "content": [
+                                                    {
+                                                        "component": "VCol",
+                                                        "props": {"cols": 12, "md": 6},
+                                                        "content": [
+                                                            {
+                                                                "component": "VTextField",
+                                                                "props": {
+                                                                    "model": "upgrade_priority",
+                                                                    "label": "洗版优先级阈值 (1-100)",
+                                                                    "type": "number",
+                                                                    "placeholder": "默认 95",
+                                                                    "density": "comfortable",
+                                                                    "hideDetails": True,
+                                                                },
+                                                            }
+                                                        ],
+                                                    },
+                                                    {
+                                                        "component": "VCol",
+                                                        "props": {"cols": 12, "md": 6},
+                                                        "content": [
+                                                            {
+                                                                "component": "VTextField",
+                                                                "props": {
+                                                                    "model": "exclude_keywords",
+                                                                    "label": "排除标题关键词",
+                                                                    "placeholder": "逗号分隔，如：短剧, 预告片",
+                                                                    "clearable": True,
+                                                                    "density": "comfortable",
+                                                                    "hideDetails": True,
+                                                                },
+                                                            }
+                                                        ],
+                                                    },
+                                                ],
+                                            },
+                                            {
+                                                "component": "VRow",
+                                                "props": {"class": "mt-2"},
+                                                "content": [
+                                                    {
+                                                        "component": "VCol",
+                                                        "props": {"cols": 12},
+                                                        "content": [
+                                                            {
+                                                                "component": "VSelect",
+                                                                "props": {
+                                                                    "model": "exclude_groups",
+                                                                    "label": "排除规则组",
+                                                                    "items": group_names,
+                                                                    "multiple": True,
+                                                                    "chips": True,
+                                                                    "closableChips": True,
+                                                                    "clearable": True,
+                                                                    "density": "comfortable",
+                                                                    "hideDetails": True,
+                                                                },
+                                                            }
+                                                        ],
+                                                    }
+                                                ],
+                                            },
+                                        ],
+                                    },
+                                ],
+                            },
+                        ],
                     },
                 ],
             }
