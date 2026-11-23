@@ -142,8 +142,8 @@ def _install_mock_moviepilot_sdk() -> Dict[str, Any]:
             return list(state["transfer_records"])
 
     class TorrentsChain:
-        def get_subscribe_cache_candidates(self, *_args: Any, **_kwargs: Any) -> List[Any]:
-            return list(state["cache_candidates"])
+        def get_torrents(self, *_args: Any, **_kwargs: Any) -> Dict[str, List[Any]]:
+            return {"mock.site": list(state["cache_candidates"])}
 
     class SearchChain:
         def process(self, **_kwargs: Any) -> List[Any]:
@@ -315,10 +315,14 @@ class SubscribeAuto4KTests(unittest.TestCase):
         self.assertEqual(sub.note, [1, 2, 3])
 
     def test_best_version_upgrade_mode_and_dry_run(self) -> None:
-        sub = _FakeSub(id=202, name="热播剧", note=[1, 2], episode_priority={"1": 87, "2": 99})
+        sub = _FakeSub(id=202, name="热播剧", media_id="20202", note=[1, 2], episode_priority={"1": 87, "2": 99})
         self.state["subscribes"] = [sub]
+        media_202 = sys.modules["app.sdk.media"].MediaInfo()
+        media_202.title = "热播剧"
+        media_202.tmdb_id = 20202
         self.state["cache_candidates"] = [
             types.SimpleNamespace(
+                media_info=media_202,
                 meta_info=sys.modules["app.sdk.media"].MetaInfo("热播剧", resource_pix="2160p", begin_season=1),
                 torrent_info=types.SimpleNamespace(title="热播剧 S01E02 2160p WEB-DL", description="", site=1),
             )

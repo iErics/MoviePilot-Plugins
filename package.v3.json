@@ -3,12 +3,13 @@
     "name": "订阅自适应4K",
     "description": "默认允许1080p兜底；当事件、整理历史、种子缓存或站点搜索发现4K后，自动追加仅4K规则组收紧订阅，并洗版此前的低分辨率剧集。",
     "labels": "订阅,洗版,4K",
-    "version": "2.0.0",
+    "version": "2.0.1",
     "icon": "teamwork.png",
     "author": "iErics",
     "level": 2,
     "system_version": ">=3.0.0,<4",
     "history": {
+      "v2.0.1": "性能优化：每轮同步仅读取一次本地种子缓存并按规范媒体身份 O(1) 预索引，消除百条订阅重复反序列化瓶颈；本地检测结束后增量落盘状态；/scan API 支持 skip_search 与 background 异步模式。",
       "v2.0.0": "基于 MoviePilot V3 稳定 SDK 全面重写：采用规范媒体身份 (media_source, media_id)；新增下载/整理 4K 实时事件零延迟触发、整理历史+本地种子缓存零请求检测、带 TTL 限速的主动探查、requeue/best_version 双洗版模式、防重复洗版、试运行 dry_run、回滚快照与 Vuetify 状态看板。",
       "v1.0.0": "初始版本：定时扫描订阅并收紧为仅4K。"
     },

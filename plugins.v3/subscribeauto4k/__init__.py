@@ -209,7 +209,7 @@ class SubscribeAuto4K(_PluginBase):
         "自动追加仅4K规则组收紧订阅，并洗版此前的低分辨率剧集。"
     )
     plugin_icon = "teamwork.png"
-    plugin_version = "2.0.0"
+    plugin_version = "2.0.1"
     plugin_author = "iErics"
     author_url = "https://github.com/iErics"
     plugin_config_prefix = "subscribeauto4k_"
@@ -959,9 +959,32 @@ class SubscribeAuto4K(_PluginBase):
             "recent_history": self._load_history()[:20],
         }
 
-    def api_scan(self, dry_run: Optional[bool] = None, force: bool = False) -> Dict[str, Any]:
-        """通过 API 触发一轮同步扫描。"""
-        return self.sync_all_subscribes(dry_run_override=dry_run, force=bool(force))
+    def api_scan(
+        self,
+        dry_run: Optional[bool] = None,
+        force: bool = False,
+        skip_search: bool = False,
+        background: bool = False,
+    ) -> Dict[str, Any]:
+        """通过 API 触发一轮同步扫描（支持只做本地检测或后台异步运行，避免反代超时）。"""
+        if background:
+            t = threading.Thread(
+                target=self.sync_all_subscribes,
+                kwargs={
+                    "dry_run_override": dry_run,
+                    "force": bool(force),
+                    "skip_search": bool(skip_search),
+                },
+                daemon=True,
+                name="SubscribeAuto4K-api-scan",
+            )
+            t.start()
+            return {"started": True, "dry_run": dry_run, "force": bool(force), "skip_search": bool(skip_search)}
+        return self.sync_all_subscribes(
+            dry_run_override=dry_run,
+            force=bool(force),
+            skip_search=bool(skip_search),
+        )
 
     def api_restore(self, subscribe_id: int) -> Dict[str, Any]:
         """将指定订阅恢复为收紧前保存的快照状态。"""
@@ -1019,8 +1042,9 @@ class SubscribeAuto4K(_PluginBase):
         *,
         dry_run_override: Optional[bool] = None,
         force: bool = False,
+        skip_search: bool = False,
     ) -> Dict[str, Any]:
-        """执行一轮全量订阅 4K 状态同步（带并发锁与主动搜索配额限制）。"""
+        """执行一轮全量订阅 4K 状态同步（预索引本地缓存 + 并发锁 + 主动搜索配额限制）。"""
         if self._lock is None:
             self._lock = threading.Lock()
         if not self._lock.acquire(blocking=False):
@@ -1029,6 +1053,7 @@ class SubscribeAuto4K(_PluginBase):
 
         try:
             dry_run = self._dry_run if dry_run_override is None else bool(dry_run_override)
+            allow_search = self._enable_active_search and not skip_search
             summary: Dict[str, Any] = {
                 "time": _format_ts(),
                 "dry_run": dry_run,
@@ -1066,6 +1091,9 @@ class SubscribeAuto4K(_PluginBase):
             torrents_chain = TorrentsChain()
             transfer_oper = TransferHistoryOper()
 
+            # 一次性读取并预索引本地种子缓存中的所有 4K 候选，避免按订阅重复反序列化缓存
+            cache_4k_index = self._build_4k_torrent_cache_index(torrents_chain)
+
             # 预计算本次需要跳过的关键词
             exclude_kws = self._parsed_exclude_keywords()
 
@@ -1080,10 +1108,12 @@ class SubscribeAuto4K(_PluginBase):
                     continue
                 prev = checked.get(str(sub.id)) if isinstance(checked.get(str(sub.id)), dict) else {}
                 last_ts = float(prev.get("ts", 0) or 0)
-                subs_with_record.append((last_ts, sub, raw_sub, prev))
+                subs_with_record.append((last_ts, sub, prev))
             subs_with_record.sort(key=lambda item: item[0])
 
-            for last_ts, sub, raw_sub, prev in subs_with_record:
+            # 先做全量零成本本地检测，收集待主动搜站队列
+            pending_search: List[Tuple[_SubView, Dict[str, Any]]] = []
+            for last_ts, sub, prev in subs_with_record:
                 if self._event is not None and self._event.is_set():
                     logger.info(f"{self.LOG_TAG}收到停止信号，提前结束本轮扫描。")
                     break
@@ -1097,7 +1127,6 @@ class SubscribeAuto4K(_PluginBase):
                 already_strict = self._strict_group in sub.filter_groups
                 if already_strict:
                     summary["already_strict"] += 1
-                    # 已经收紧为仅4K的剧集，如开启洗版且仍有未处理过的低分辨率旧集，顺便检查一次
                     if sub.is_tv and self._auto_upgrade:
                         upgraded = self._maybe_upgrade_existing_episodes(
                             sub=sub,
@@ -1113,51 +1142,12 @@ class SubscribeAuto4K(_PluginBase):
                 # 第 1 层：零成本检查整理历史是否已出现本季 4K
                 has_4k, signal_source = self._detect_4k_from_transfer_history(sub, transfer_oper)
 
-                # 第 2 层：零成本检查本地种子缓存是否已有匹配 4K 候选
+                # 第 2 层：零成本 O(1) 查预索引的本地种子缓存
                 if not has_4k:
-                    has_4k, signal_source = self._detect_4k_from_torrent_cache(
-                        sub, raw_sub, torrents_chain
-                    )
+                    has_4k, signal_source = self._detect_4k_from_cache_index(sub, cache_4k_index)
 
                 if has_4k:
                     summary["local_hits"] += 1
-                elif self._enable_active_search:
-                    # 第 3 层：超过冷却时间且未达本轮配额上限，执行受控主动探查
-                    if not force and ttl_seconds > 0 and (now_ts - last_ts) < ttl_seconds:
-                        continue
-                    if active_searches_used >= self._batch_limit:
-                        continue
-                    active_searches_used += 1
-                    summary["search_calls"] += 1
-                    try:
-                        has_4k, signal_source = self._detect_4k_by_active_search(sub)
-                        if has_4k:
-                            summary["search_hits"] += 1
-                    except Exception as exc:
-                        logger.warning(f"{self.LOG_TAG}主动探查《{sub.display_title}》异常: {exc}")
-                        summary["errors"] += 1
-                        checked[str(sub.id)] = {
-                            **prev,
-                            "ts": now_ts,
-                            "name": sub.display_title,
-                            "has_4k": False,
-                            "source": "search:error",
-                            "tightened": False,
-                        }
-                        continue
-                else:
-                    # 未开启主动搜索，仅记录本地扫描时间
-                    checked[str(sub.id)] = {
-                        **prev,
-                        "ts": now_ts,
-                        "name": sub.display_title,
-                        "has_4k": False,
-                        "source": "local:none",
-                        "tightened": False,
-                    }
-                    continue
-
-                if has_4k:
                     tightened, upgraded_eps = self._apply_4k_policy(
                         sub=sub,
                         sub_oper=sub_oper,
@@ -1169,15 +1159,68 @@ class SubscribeAuto4K(_PluginBase):
                     if tightened:
                         summary["tightened"] += 1
                     summary["upgraded_episodes"] += len(upgraded_eps)
+                elif allow_search:
+                    if force or ttl_seconds <= 0 or (now_ts - last_ts) >= ttl_seconds:
+                        pending_search.append((sub, prev))
                 else:
                     checked[str(sub.id)] = {
                         **prev,
                         "ts": now_ts,
                         "name": sub.display_title,
                         "has_4k": False,
-                        "source": signal_source or "search:none",
+                        "source": "local:none",
                         "tightened": False,
                     }
+
+            # 本地零成本阶段结束后立即落盘一次，便于前端/API 实时可见进度
+            self.save_data("checked", checked)
+            self.save_data("last_run", summary)
+
+            # 第 3 层：受控主动搜站（严格遵守 batch_limit）
+            for sub, prev in pending_search:
+                if self._event is not None and self._event.is_set():
+                    break
+                if active_searches_used >= self._batch_limit:
+                    break
+                active_searches_used += 1
+                summary["search_calls"] += 1
+                try:
+                    has_4k, signal_source = self._detect_4k_by_active_search(sub)
+                    if has_4k:
+                        summary["search_hits"] += 1
+                        tightened, upgraded_eps = self._apply_4k_policy(
+                            sub=sub,
+                            sub_oper=sub_oper,
+                            transfer_oper=transfer_oper,
+                            checked=checked,
+                            source=signal_source,
+                            dry_run=dry_run,
+                        )
+                        if tightened:
+                            summary["tightened"] += 1
+                        summary["upgraded_episodes"] += len(upgraded_eps)
+                    else:
+                        checked[str(sub.id)] = {
+                            **prev,
+                            "ts": time.time(),
+                            "name": sub.display_title,
+                            "has_4k": False,
+                            "source": signal_source or "search:none",
+                            "tightened": False,
+                        }
+                except Exception as exc:
+                    logger.warning(f"{self.LOG_TAG}主动探查《{sub.display_title}》异常: {exc}")
+                    summary["errors"] += 1
+                    checked[str(sub.id)] = {
+                        **prev,
+                        "ts": time.time(),
+                        "name": sub.display_title,
+                        "has_4k": False,
+                        "source": "search:error",
+                        "tightened": False,
+                    }
+                self.save_data("checked", checked)
+                self.save_data("last_run", summary)
 
             self.save_data("checked", checked)
             self.save_data("last_run", summary)
@@ -1267,36 +1310,82 @@ class SubscribeAuto4K(_PluginBase):
                 return True, "transfer_history"
         return False, ""
 
-    def _detect_4k_from_torrent_cache(
+    def _build_4k_torrent_cache_index(
         self,
-        sub: _SubView,
-        raw_sub: Any,
         torrents_chain: TorrentsChain,
-    ) -> Tuple[bool, str]:
-        """从本地 RSS/站点种子缓存中零成本检查是否出现匹配订阅的 4K 候选。"""
+    ) -> Dict[Tuple[str, str], List[Tuple[Optional[int], Optional[int], Optional[int]]]]:
+        """
+        一次性扫描本地种子缓存，按规范媒体身份预索引 4K 候选：
+        {(media_source_value, media_id): [(begin_season, end_season, site_id), ...]}。
+        """
+        index: Dict[Tuple[str, str], List[Tuple[Optional[int], Optional[int], Optional[int]]]] = {}
         try:
-            candidates = torrents_chain.get_subscribe_cache_candidates(
-                raw_sub,
-                allow_title_match=False,
-            )
+            cache_map = torrents_chain.get_torrents() or {}
         except Exception as exc:
-            logger.debug(f"{self.LOG_TAG}读取《{sub.display_title}》种子缓存候选失败: {exc}")
-            return False, ""
+            logger.debug(f"{self.LOG_TAG}读取本地种子缓存失败: {exc}")
+            return index
 
-        for ctx in candidates or []:
-            meta = getattr(ctx, "meta_info", None)
-            torrent = getattr(ctx, "torrent_info", None)
-            if not _is_4k_meta(
-                meta,
-                getattr(torrent, "title", None),
-                getattr(torrent, "description", None),
-            ):
-                continue
-            # 若订阅限定了站点，确认命中种子属于允许的站点
-            if sub.sites and torrent is not None:
-                site_id = getattr(torrent, "site", None)
-                if site_id is not None and int(site_id) not in sub.sites:
+        for contexts in cache_map.values():
+            for ctx in contexts or []:
+                if not ctx:
                     continue
+                meta = getattr(ctx, "meta_info", None)
+                torrent = getattr(ctx, "torrent_info", None)
+                if not _is_4k_meta(
+                    meta,
+                    getattr(torrent, "title", None),
+                    getattr(torrent, "description", None),
+                ):
+                    continue
+                mediainfo = getattr(ctx, "media_info", None)
+                if not mediainfo:
+                    continue
+                keys = self._extract_mediainfo_keys(mediainfo)
+                if not keys:
+                    continue
+                begin_season = getattr(meta, "begin_season", None) if meta is not None else None
+                end_season = (getattr(meta, "end_season", None) if meta is not None else None) or begin_season
+                raw_site = getattr(torrent, "site", None) if torrent is not None else None
+                site_id = int(raw_site) if raw_site is not None and str(raw_site).isdigit() else None
+                for key in keys:
+                    index.setdefault(key, []).append((begin_season, end_season, site_id))
+        return index
+
+    @staticmethod
+    def _extract_mediainfo_keys(mediainfo: Any) -> List[Tuple[str, str]]:
+        """从 MediaInfo 提取可用于精确匹配的 (media_source, media_id) 键集合。"""
+        keys: List[Tuple[str, str]] = []
+        tmdb_id = getattr(mediainfo, "tmdb_id", None)
+        if tmdb_id not in (None, "", 0, "0"):
+            keys.append((MediaSource.TMDB.value, str(tmdb_id)))
+        douban_id = getattr(mediainfo, "douban_id", None)
+        if douban_id not in (None, "", 0, "0"):
+            keys.append((MediaSource.DOUBAN.value, str(douban_id)))
+        src = normalize_media_source(getattr(mediainfo, "source", None))
+        mid = getattr(mediainfo, "media_id", None)
+        if src and mid not in (None, "", 0, "0"):
+            pair = (src.value, str(mid))
+            if pair not in keys:
+                keys.append(pair)
+        return keys
+
+    @staticmethod
+    def _detect_4k_from_cache_index(
+        sub: _SubView,
+        cache_4k_index: Dict[Tuple[str, str], List[Tuple[Optional[int], Optional[int], Optional[int]]]],
+    ) -> Tuple[bool, str]:
+        """O(1) 匹配预索引的本地 4K 种子缓存。"""
+        if not sub.media_source or not sub.media_id:
+            return False, ""
+        entries = cache_4k_index.get((sub.media_source.value, str(sub.media_id)))
+        if not entries:
+            return False, ""
+        for begin_season, end_season, site_id in entries:
+            if sub.is_tv and sub.season is not None and begin_season is not None:
+                if not (begin_season <= sub.season <= (end_season or begin_season)):
+                    continue
+            if sub.sites and site_id is not None and site_id not in sub.sites:
+                continue
             return True, "torrent_cache"
         return False, ""
 
