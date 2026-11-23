@@ -405,6 +405,45 @@ class SubscribeAuto4KTests(unittest.TestCase):
         # Latest 5 episodes (26..30) were removed from note; earlier 1..25 untouched
         self.assertEqual(sub.note, list(range(1, 26)))
 
+        # Subsequent scans MUST respect cumulative cap and not dig further back into 21..25
+        summary2 = self.plugin.sync_all_subscribes(skip_search=True)
+        self.assertEqual(summary2["already_strict"], 1)
+        self.assertEqual(summary2["upgraded_episodes"], 0)
+        self.assertEqual(sub.note, list(range(1, 26)))
+
+        # Partial restore (keep_strict=True) restores note while keeping 仅4K
+        res = self.plugin.api_restore(505, keep_strict=True)
+        self.assertTrue(res["success"])
+        self.assertEqual(sub.note, list(range(1, 31)))
+        self.assertEqual(sub.filter_groups, ["免费", "前置过滤", "仅4K"])
+
+    def test_dry_run_and_skip_search_do_not_block_active_search_cooldown(self) -> None:
+        sub = _FakeSub(id=606, name="待探查剧", note=[], episode_priority={})
+        self.state["subscribes"] = [sub]
+        self.state["search_results"] = [
+            types.SimpleNamespace(
+                meta_info=sys.modules["app.sdk.media"].MetaInfo("待探查剧", resource_pix="2160p", begin_season=1),
+                torrent_info=types.SimpleNamespace(title="待探查剧 S01E01 2160p WEB-DL", description="", site=1),
+            )
+        ]
+        self.plugin.init_plugin(
+            {
+                "enabled": True,
+                "enable_active_search": True,
+                "check_ttl_hours": 6,
+                "batch_limit": 5,
+            }
+        )
+        # First a local-only dry run must NOT set search_ts cooldown
+        dry = self.plugin.sync_all_subscribes(dry_run_override=True, skip_search=True)
+        self.assertEqual(dry["search_calls"], 0)
+
+        # Next real run immediately performs active search without waiting 6 hours
+        real = self.plugin.sync_all_subscribes(dry_run_override=False, skip_search=False)
+        self.assertEqual(real["search_calls"], 1)
+        self.assertEqual(real["search_hits"], 1)
+        self.assertIn("仅4K", sub.filter_groups)
+
     def test_form_page_and_service_contracts(self) -> None:
         self.plugin.init_plugin({"enabled": True, "scan_cron": "*/15 * * * *"})
         form, defaults = self.plugin.get_form()

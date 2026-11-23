@@ -210,7 +210,7 @@ class SubscribeAuto4K(_PluginBase):
         "自动追加仅4K规则组收紧订阅，并洗版此前的低分辨率剧集。"
     )
     plugin_icon = "teamwork.png"
-    plugin_version = "2.0.2"
+    plugin_version = "2.0.3"
     plugin_author = "iErics"
     author_url = "https://github.com/iErics"
     plugin_config_prefix = "subscribeauto4k_"
@@ -1008,8 +1008,11 @@ class SubscribeAuto4K(_PluginBase):
             skip_search=bool(skip_search),
         )
 
-    def api_restore(self, subscribe_id: int) -> Dict[str, Any]:
-        """将指定订阅恢复为收紧前保存的快照状态。"""
+    def api_restore(self, subscribe_id: int, keep_strict: bool = False) -> Dict[str, Any]:
+        """
+        将指定订阅恢复为收紧前保存的快照状态。
+        当 keep_strict=True 时保留当前 filter_groups（继续仅下 4K），仅恢复 note / lack_episode / episode_priority。
+        """
         snapshots = self._load_snapshots()
         key = str(subscribe_id)
         snap = snapshots.get(key)
@@ -1021,10 +1024,10 @@ class SubscribeAuto4K(_PluginBase):
         if not current:
             return {"success": False, "message": f"订阅 {subscribe_id} 已不存在。"}
 
-        payload: Dict[str, Any] = {
-            "filter_groups": snap.get("filter_groups") or [],
-            "best_version": int(snap.get("best_version", 0) or 0),
-        }
+        payload: Dict[str, Any] = {}
+        if not keep_strict:
+            payload["filter_groups"] = snap.get("filter_groups") or []
+            payload["best_version"] = int(snap.get("best_version", 0) or 0)
         if "note" in snap and snap["note"] is not None:
             payload["note"] = snap["note"]
         if "lack_episode" in snap and snap["lack_episode"] is not None:
@@ -1033,27 +1036,32 @@ class SubscribeAuto4K(_PluginBase):
             payload["episode_priority"] = snap["episode_priority"]
 
         sub_oper.update(int(subscribe_id), payload)
-        snapshots.pop(key, None)
-        self.save_data("snapshots", snapshots)
+        if not keep_strict:
+            snapshots.pop(key, None)
+            self.save_data("snapshots", snapshots)
 
         checked = self._load_checked()
         if key in checked and isinstance(checked[key], dict):
-            checked[key]["tightened"] = False
-            checked[key]["action"] = "restored"
+            if not keep_strict:
+                checked[key]["tightened"] = False
+                checked[key]["action"] = "restored"
+            else:
+                checked[key]["action"] = "restored_episodes"
             self.save_data("checked", checked)
 
+        action_text = "已恢复集数(保留仅4K)" if keep_strict else "已回滚快照"
         self._append_history(
             {
                 "time": _format_ts(),
                 "subscribe_id": int(subscribe_id),
                 "title": snap.get("title") or str(subscribe_id),
                 "source": "api:restore",
-                "action": "已回滚快照",
+                "action": action_text,
                 "upgraded_episodes": [],
-                "detail": f"恢复 filter_groups={payload['filter_groups']}",
+                "detail": f"keep_strict={keep_strict}, note_count={len(payload.get('note') or [])}",
             }
         )
-        return {"success": True, "message": f"已恢复订阅 {subscribe_id} 的收紧前配置。", "restored": payload}
+        return {"success": True, "message": f"已恢复订阅 {subscribe_id}。", "restored": payload}
 
     # ------------------------------------------------------------------
     # 核心同步引擎
@@ -1119,7 +1127,7 @@ class SubscribeAuto4K(_PluginBase):
             # 预计算本次需要跳过的关键词
             exclude_kws = self._parsed_exclude_keywords()
 
-            # 把最久未检查的订阅排在前面，确保在 batch_limit 限制下公平轮询
+            # 把最久未做主动探查（search_ts 最小）的订阅排在前面，确保在 batch_limit 下公平轮询
             subs_with_record = []
             for raw_sub in raw_subs:
                 try:
@@ -1129,13 +1137,13 @@ class SubscribeAuto4K(_PluginBase):
                     summary["errors"] += 1
                     continue
                 prev = checked.get(str(sub.id)) if isinstance(checked.get(str(sub.id)), dict) else {}
-                last_ts = float(prev.get("ts", 0) or 0)
-                subs_with_record.append((last_ts, sub, prev))
+                last_search_ts = float(prev.get("search_ts", 0) or 0)
+                subs_with_record.append((last_search_ts, sub, prev))
             subs_with_record.sort(key=lambda item: item[0])
 
             # 先做全量零成本本地检测，收集待主动搜站队列
             pending_search: List[Tuple[_SubView, Dict[str, Any]]] = []
-            for last_ts, sub, prev in subs_with_record:
+            for last_search_ts, sub, prev in subs_with_record:
                 if self._event is not None and self._event.is_set():
                     logger.info(f"{self.LOG_TAG}收到停止信号，提前结束本轮扫描。")
                     break
@@ -1182,9 +1190,9 @@ class SubscribeAuto4K(_PluginBase):
                         summary["tightened"] += 1
                     summary["upgraded_episodes"] += len(upgraded_eps)
                 elif allow_search:
-                    if force or ttl_seconds <= 0 or (now_ts - last_ts) >= ttl_seconds:
+                    if force or ttl_seconds <= 0 or (now_ts - last_search_ts) >= ttl_seconds:
                         pending_search.append((sub, prev))
-                else:
+                elif not dry_run:
                     checked[str(sub.id)] = {
                         **prev,
                         "ts": now_ts,
@@ -1194,11 +1202,12 @@ class SubscribeAuto4K(_PluginBase):
                         "tightened": False,
                     }
 
-            # 本地零成本阶段结束后立即落盘一次，便于前端/API 实时可见进度
-            self.save_data("checked", checked)
+            # 本地零成本阶段结束后立即落盘一次（dry_run 不污染 checked 冷却状态）
+            if not dry_run:
+                self.save_data("checked", checked)
             self.save_data("last_run", summary)
 
-            # 第 3 层：受控主动搜站（严格遵守 batch_limit）
+            # 第 3 层：受控主动搜站（严格遵守 batch_limit，仅真实搜索更新 search_ts）
             for sub, prev in pending_search:
                 if self._event is not None and self._event.is_set():
                     break
@@ -1206,6 +1215,7 @@ class SubscribeAuto4K(_PluginBase):
                     break
                 active_searches_used += 1
                 summary["search_calls"] += 1
+                search_now = time.time()
                 try:
                     has_4k, signal_source = self._detect_4k_by_active_search(sub)
                     if has_4k:
@@ -1221,10 +1231,13 @@ class SubscribeAuto4K(_PluginBase):
                         if tightened:
                             summary["tightened"] += 1
                         summary["upgraded_episodes"] += len(upgraded_eps)
-                    else:
+                        if not dry_run and str(sub.id) in checked:
+                            checked[str(sub.id)]["search_ts"] = search_now
+                    elif not dry_run:
                         checked[str(sub.id)] = {
                             **prev,
-                            "ts": time.time(),
+                            "ts": search_now,
+                            "search_ts": search_now,
                             "name": sub.display_title,
                             "has_4k": False,
                             "source": signal_source or "search:none",
@@ -1233,18 +1246,22 @@ class SubscribeAuto4K(_PluginBase):
                 except Exception as exc:
                     logger.warning(f"{self.LOG_TAG}主动探查《{sub.display_title}》异常: {exc}")
                     summary["errors"] += 1
-                    checked[str(sub.id)] = {
-                        **prev,
-                        "ts": time.time(),
-                        "name": sub.display_title,
-                        "has_4k": False,
-                        "source": "search:error",
-                        "tightened": False,
-                    }
-                self.save_data("checked", checked)
+                    if not dry_run:
+                        checked[str(sub.id)] = {
+                            **prev,
+                            "ts": search_now,
+                            "search_ts": search_now,
+                            "name": sub.display_title,
+                            "has_4k": False,
+                            "source": "search:error",
+                            "tightened": False,
+                        }
+                if not dry_run:
+                    self.save_data("checked", checked)
                 self.save_data("last_run", summary)
 
-            self.save_data("checked", checked)
+            if not dry_run:
+                self.save_data("checked", checked)
             self.save_data("last_run", summary)
             logger.info(
                 f"{self.LOG_TAG}同步完成: 扫描={summary['scanned']}, "
@@ -1632,9 +1649,13 @@ class SubscribeAuto4K(_PluginBase):
             if pri is not None and pri < self._upgrade_priority:
                 targets.append(ep)
 
-        if self._upgrade_max_episodes > 0 and len(targets) > self._upgrade_max_episodes:
-            # 优先洗版最新（集号最大）的 N 集，避免长篇年番前几百集无 4K 源导致反复无效检索
-            targets = targets[-self._upgrade_max_episodes :]
+        if self._upgrade_max_episodes > 0:
+            remaining_quota = max(0, self._upgrade_max_episodes - len(already_upgraded))
+            if remaining_quota == 0:
+                return []
+            if len(targets) > remaining_quota:
+                # 优先洗版最新（集号最大）的 N 集，并按单剧累计配额封顶，防止长篇年番每轮持续往前挖旧集
+                targets = targets[-remaining_quota:]
         return targets
 
     def _build_upgrade_payload(self, sub: _SubView, low_res_eps: List[int]) -> Dict[str, Any]:
