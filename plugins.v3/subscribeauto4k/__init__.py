@@ -27,8 +27,9 @@ from app.chain.media import MediaChain
 from app.chain.search import SearchChain
 from app.chain.torrents import TorrentsChain
 from app.db.oper.subscribe import SubscribeOper
+from app.db.oper.systemconfig import SystemConfigOper
 from app.db.oper.transferhistory import TransferHistoryOper
-from app.schemas.types import EventType, MediaSource, MediaType, NotificationType
+from app.schemas.types import EventType, MediaSource, MediaType, NotificationType, SystemConfigKey
 from app.sdk.config import settings
 from app.sdk.events import Event, eventmanager
 from app.sdk.logging import logger
@@ -209,7 +210,7 @@ class SubscribeAuto4K(_PluginBase):
         "自动追加仅4K规则组收紧订阅，并洗版此前的低分辨率剧集。"
     )
     plugin_icon = "teamwork.png"
-    plugin_version = "2.0.1"
+    plugin_version = "2.0.2"
     plugin_author = "iErics"
     author_url = "https://github.com/iErics"
     plugin_config_prefix = "subscribeauto4k_"
@@ -234,6 +235,7 @@ class SubscribeAuto4K(_PluginBase):
     _enable_active_search: bool = True
     _include_movie: bool = True
     _upgrade_mode: str = "requeue"  # "requeue" | "best_version"
+    _upgrade_max_episodes: int = 20
     _exclude_groups: List[str] = []
     _exclude_keywords: str = ""
     _notify: bool = False
@@ -268,6 +270,9 @@ class SubscribeAuto4K(_PluginBase):
         self._include_movie = bool(cfg.get("include_movie", True))
         mode = str(cfg.get("upgrade_mode") or "requeue").strip().lower()
         self._upgrade_mode = mode if mode in ("requeue", "best_version") else "requeue"
+        self._upgrade_max_episodes = self._to_int(
+            cfg.get("upgrade_max_episodes"), 20, minimum=0, maximum=500
+        )
         raw_ex_groups = cfg.get("exclude_groups")
         self._exclude_groups = (
             [str(x).strip() for x in raw_ex_groups if str(x).strip()]
@@ -451,7 +456,7 @@ class SubscribeAuto4K(_PluginBase):
                         "content": [
                             {
                                 "component": "VCol",
-                                "props": {"cols": 12, "md": 4},
+                                "props": {"cols": 12, "md": 3},
                                 "content": [
                                     {
                                         "component": "VSelect",
@@ -467,7 +472,7 @@ class SubscribeAuto4K(_PluginBase):
                             },
                             {
                                 "component": "VCol",
-                                "props": {"cols": 12, "md": 4},
+                                "props": {"cols": 12, "md": 3},
                                 "content": [
                                     {
                                         "component": "VSelect",
@@ -486,7 +491,7 @@ class SubscribeAuto4K(_PluginBase):
                             },
                             {
                                 "component": "VCol",
-                                "props": {"cols": 12, "md": 4},
+                                "props": {"cols": 12, "md": 3},
                                 "content": [
                                     {
                                         "component": "VTextField",
@@ -494,7 +499,23 @@ class SubscribeAuto4K(_PluginBase):
                                             "model": "upgrade_priority",
                                             "label": "洗版优先级阈值 (1-100)",
                                             "type": "number",
-                                            "hint": "episode_priority 低于该值且未落地4K的集将触发洗版",
+                                            "hint": "低于该值且未落地4K的集将洗版",
+                                            "persistentHint": True,
+                                        },
+                                    }
+                                ],
+                            },
+                            {
+                                "component": "VCol",
+                                "props": {"cols": 12, "md": 3},
+                                "content": [
+                                    {
+                                        "component": "VTextField",
+                                        "props": {
+                                            "model": "upgrade_max_episodes",
+                                            "label": "单剧最多洗版集数 (0=不限)",
+                                            "type": "number",
+                                            "hint": "优先洗版最新 N 集，防止长篇年番一次重下上百集",
                                             "persistentHint": True,
                                         },
                                     }
@@ -687,6 +708,7 @@ class SubscribeAuto4K(_PluginBase):
             "enable_active_search": True,
             "include_movie": True,
             "upgrade_mode": "requeue",
+            "upgrade_max_episodes": 20,
             "exclude_groups": [],
             "exclude_keywords": "",
             "notify": False,
@@ -1395,7 +1417,7 @@ class SubscribeAuto4K(_PluginBase):
         if not mediainfo:
             return False, "search:unrecognized"
 
-        strict_rule_groups = list(sub.filter_groups)
+        strict_rule_groups = self._resolve_effective_filter_groups(sub)
         if self._strict_group not in strict_rule_groups:
             strict_rule_groups.append(self._strict_group)
 
@@ -1447,7 +1469,7 @@ class SubscribeAuto4K(_PluginBase):
         dry_run: bool,
     ) -> Tuple[bool, List[int]]:
         """收紧订阅为仅4K，并按需触发低分辨率旧集洗版。"""
-        new_groups = list(sub.filter_groups)
+        new_groups = self._resolve_effective_filter_groups(sub)
         if self._strict_group not in new_groups:
             new_groups.append(self._strict_group)
 
@@ -1610,6 +1632,9 @@ class SubscribeAuto4K(_PluginBase):
             if pri is not None and pri < self._upgrade_priority:
                 targets.append(ep)
 
+        if self._upgrade_max_episodes > 0 and len(targets) > self._upgrade_max_episodes:
+            # 优先洗版最新（集号最大）的 N 集，避免长篇年番前几百集无 4K 源导致反复无效检索
+            targets = targets[-self._upgrade_max_episodes :]
         return targets
 
     def _build_upgrade_payload(self, sub: _SubView, low_res_eps: List[int]) -> Dict[str, Any]:
@@ -1645,6 +1670,22 @@ class SubscribeAuto4K(_PluginBase):
     # ------------------------------------------------------------------
     # 辅助方法
     # ------------------------------------------------------------------
+
+    def _resolve_effective_filter_groups(self, sub: _SubView) -> List[str]:
+        """
+        返回订阅当前实际生效的规则组列表。
+        若订阅自身 filter_groups 为空，先继承系统默认 SubscribeFilterRuleGroups（如「免费」「前置过滤」），
+        避免追加「仅4K」后覆盖掉全局默认过滤规则。
+        """
+        if sub.filter_groups:
+            return list(sub.filter_groups)
+        try:
+            defaults = SystemConfigOper().get(SystemConfigKey.SubscribeFilterRuleGroups)
+            if isinstance(defaults, list):
+                return [str(g) for g in defaults if g]
+        except Exception as exc:
+            logger.debug(f"{self.LOG_TAG}读取默认订阅过滤规则组失败: {exc}")
+        return []
 
     def _verify_strict_group_exists(self) -> bool:
         """确认配置的 4K 规则组在系统中真实存在。"""
@@ -1819,6 +1860,7 @@ class SubscribeAuto4K(_PluginBase):
                 "enable_active_search": self._enable_active_search,
                 "include_movie": self._include_movie,
                 "upgrade_mode": self._upgrade_mode,
+                "upgrade_max_episodes": self._upgrade_max_episodes,
                 "exclude_groups": self._exclude_groups,
                 "exclude_keywords": self._exclude_keywords,
                 "notify": self._notify,

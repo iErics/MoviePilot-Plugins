@@ -39,6 +39,15 @@ def _install_mock_moviepilot_sdk() -> Dict[str, Any]:
     class NotificationType(Enum):
         Subscribe = "订阅"
 
+    class SystemConfigKey(Enum):
+        SubscribeFilterRuleGroups = "SubscribeFilterRuleGroups"
+
+    class SystemConfigOper:
+        def get(self, key: Any) -> Any:
+            if key == SystemConfigKey.SubscribeFilterRuleGroups:
+                return ["免费", "前置过滤"]
+            return None
+
     class Event:
         def __init__(self, event_data: dict | None = None):
             self.event_data = event_data or {}
@@ -203,6 +212,7 @@ def _install_mock_moviepilot_sdk() -> Dict[str, Any]:
         MediaSource=MediaSource,
         MediaType=MediaType,
         NotificationType=NotificationType,
+        SystemConfigKey=SystemConfigKey,
     )
     _mk("app.sdk")
     _mk("app.sdk.config", settings=types.SimpleNamespace(TZ="Asia/Shanghai"))
@@ -219,6 +229,7 @@ def _install_mock_moviepilot_sdk() -> Dict[str, Any]:
     _mk("app.db")
     _mk("app.db.oper")
     _mk("app.db.oper.subscribe", SubscribeOper=SubscribeOper)
+    _mk("app.db.oper.systemconfig", SystemConfigOper=SystemConfigOper)
     _mk("app.db.oper.transferhistory", TransferHistoryOper=TransferHistoryOper)
     _mk("app.chain")
     _mk("app.chain.media", MediaChain=MediaChain)
@@ -365,6 +376,34 @@ class SubscribeAuto4KTests(unittest.TestCase):
         self.assertEqual(summary["errors"], 1)
         self.assertEqual(summary["tightened"], 0)
         self.assertEqual(self.state["updated_calls"], [])
+
+    def test_empty_filter_groups_inherits_global_defaults_and_caps_upgrade_episodes(self) -> None:
+        sub = _FakeSub(
+            id=505,
+            name="长篇年番",
+            filter_groups=[],
+            note=list(range(1, 31)),
+            episode_priority={str(i): 88 for i in range(1, 31)},
+            total_episode=100,
+        )
+        self.state["subscribes"] = [sub]
+        self.state["transfer_records"] = [
+            types.SimpleNamespace(status=True, episodes="E31", src="Show.S01E31.2160p.mkv", dest="S01E31.2160p.mkv"),
+        ]
+        self.plugin.init_plugin(
+            {
+                "enabled": True,
+                "strict_group": "仅4K",
+                "auto_upgrade": True,
+                "upgrade_max_episodes": 5,
+            }
+        )
+        summary = self.plugin.sync_all_subscribes(skip_search=True)
+        self.assertEqual(summary["tightened"], 1)
+        self.assertEqual(summary["upgraded_episodes"], 5)
+        self.assertEqual(sub.filter_groups, ["免费", "前置过滤", "仅4K"])
+        # Latest 5 episodes (26..30) were removed from note; earlier 1..25 untouched
+        self.assertEqual(sub.note, list(range(1, 26)))
 
     def test_form_page_and_service_contracts(self) -> None:
         self.plugin.init_plugin({"enabled": True, "scan_cron": "*/15 * * * *"})
