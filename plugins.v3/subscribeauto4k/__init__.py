@@ -16,6 +16,7 @@ import inspect
 import re
 import threading
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set, Tuple
 
@@ -161,9 +162,18 @@ def _is_low_res_text(text: Optional[str]) -> bool:
     return bool(_RE_LOW_RES.search(text_str))
 
 
+def _get_field(obj: Any, key: str, default: Any = None) -> Any:
+    """兼容 dict/Mapping 与 Pydantic/dataclass/快照对象地读取字段。"""
+    if obj is None:
+        return default
+    if isinstance(obj, Mapping):
+        return obj.get(key, default)
+    return getattr(obj, key, default)
+
+
 def _is_4k_meta(meta: Any, *fallback_texts: Optional[str]) -> bool:
     """优先依据 MetaInfo.resource_pix，再结合原始文本判断是否 4K。"""
-    pix = getattr(meta, "resource_pix", None) if meta is not None else None
+    pix = _get_field(meta, "resource_pix")
     if isinstance(pix, str) and pix.strip():
         pix_lower = pix.strip().lower()
         if any(tag in pix_lower for tag in ("2160", "4k", "uhd")):
@@ -210,7 +220,7 @@ class SubscribeAuto4K(_PluginBase):
         "自动追加仅4K规则组收紧订阅，并洗版此前的低分辨率剧集。"
     )
     plugin_icon = "teamwork.png"
-    plugin_version = "2.0.5"
+    plugin_version = "2.0.6"
     plugin_author = "iErics"
     author_url = "https://github.com/iErics"
     plugin_config_prefix = "subscribeauto4k_"
@@ -979,12 +989,12 @@ class SubscribeAuto4K(_PluginBase):
         if not event or not event.event_data:
             return
         data = event.event_data
-        if data.get("action") != "subscribe_auto_4k_scan":
+        if _get_field(data, "action") != "subscribe_auto_4k_scan":
             return
         logger.info(f"{self.LOG_TAG}收到远程指令，开始执行订阅自适应4K同步。")
         summary = self.sync_all_subscribes(force=False)
-        channel = data.get("channel")
-        userid = data.get("user")
+        channel = _get_field(data, "channel")
+        userid = _get_field(data, "user")
         if channel:
             self.post_message(
                 channel=channel,
@@ -1006,18 +1016,22 @@ class SubscribeAuto4K(_PluginBase):
         if not self._enabled or not self._enable_event_watch:
             return
         data = event.event_data if event else None
-        if not isinstance(data, dict):
+        if data is None:
             return
-        meta = data.get("meta")
-        mediainfo = data.get("mediainfo")
-        transferinfo = data.get("transferinfo")
-        fileitem = data.get("fileitem")
+        meta = _get_field(data, "meta")
+        mediainfo = _get_field(data, "mediainfo")
+        transferinfo = _get_field(data, "transferinfo")
+        fileitem = _get_field(data, "fileitem")
 
+        target_item = _get_field(transferinfo, "target_item")
+        src_item = _get_field(transferinfo, "fileitem")
         texts = [
-            getattr(fileitem, "name", None),
-            getattr(fileitem, "path", None),
-            getattr(getattr(transferinfo, "target_item", None), "name", None),
-            getattr(getattr(transferinfo, "fileitem", None), "name", None),
+            _get_field(fileitem, "name"),
+            _get_field(fileitem, "path"),
+            _get_field(target_item, "name"),
+            _get_field(target_item, "path"),
+            _get_field(src_item, "name"),
+            _get_field(src_item, "path"),
         ]
         if not _is_4k_meta(meta, *texts):
             return
@@ -1029,17 +1043,17 @@ class SubscribeAuto4K(_PluginBase):
         if not self._enabled or not self._enable_event_watch:
             return
         data = event.event_data if event else None
-        if not isinstance(data, dict):
+        if data is None:
             return
-        context = data.get("context")
+        context = _get_field(data, "context")
         if not context:
             return
-        meta = getattr(context, "meta_info", None)
-        mediainfo = getattr(context, "media_info", None)
-        torrent = getattr(context, "torrent_info", None)
+        meta = _get_field(context, "meta_info")
+        mediainfo = _get_field(context, "media_info")
+        torrent = _get_field(context, "torrent_info")
         texts = [
-            getattr(torrent, "title", None),
-            getattr(torrent, "description", None),
+            _get_field(torrent, "title"),
+            _get_field(torrent, "description"),
         ]
         if not _is_4k_meta(meta, *texts):
             return
@@ -1370,15 +1384,21 @@ class SubscribeAuto4K(_PluginBase):
         """收到实时 4K 下载或整理事件后，快速定位对应运行中订阅并收紧。"""
         if not mediainfo:
             return
-        media_source = normalize_media_source(getattr(mediainfo, "source", None))
-        media_id = getattr(mediainfo, "tmdb_id", None) or getattr(mediainfo, "douban_id", None)
-        if not media_id:
-            media_id = getattr(mediainfo, "media_id", None)
+        raw_source = _get_field(mediainfo, "media_source") or _get_field(mediainfo, "source")
+        media_source = normalize_media_source(raw_source)
+        tmdb_id = _get_field(mediainfo, "tmdb_id")
+        douban_id = _get_field(mediainfo, "douban_id")
+        media_id = _get_field(mediainfo, "media_id") or tmdb_id or douban_id
+        if not media_source:
+            if tmdb_id not in (None, "", 0, "0"):
+                media_source = MediaSource.TMDB
+            elif douban_id not in (None, "", 0, "0"):
+                media_source = MediaSource.DOUBAN
         media_id_str = str(media_id).strip() if media_id not in (None, "", 0, "0") else None
-        season = getattr(meta, "begin_season", None) if meta is not None else None
-        mtype = getattr(mediainfo, "type", None)
+        season = _get_field(meta, "begin_season")
+        mtype = _get_field(mediainfo, "type")
         mtype_val = mtype.value if hasattr(mtype, "value") else str(mtype or "")
-        title = str(getattr(mediainfo, "title", "") or "")
+        title = str(_get_field(mediainfo, "title") or "")
 
         if self._lock is None:
             self._lock = threading.Lock()

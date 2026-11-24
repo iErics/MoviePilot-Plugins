@@ -368,6 +368,33 @@ class SubscribeAuto4KTests(unittest.TestCase):
 
         self.assertIn("仅4K", sub.filter_groups)
 
+    def test_realtime_contract_object_events_tighten_immediately(self) -> None:
+        sub1 = _FakeSub(id=304, name="合同事件整理4K", media_id="88881", note=[1], episode_priority={"1": 88})
+        sub2 = _FakeSub(id=305, name="合同事件下载4K", media_id="88882", note=[1], episode_priority={"1": 88})
+        self.state["subscribes"] = [sub1, sub2]
+        self.plugin.init_plugin({"enabled": True, "enable_event_watch": True, "auto_upgrade": False})
+
+        # Simulate V3 BaseEventData / snapshot object (non-dict) for TransferComplete
+        transfer_payload = types.SimpleNamespace(
+            mediainfo={"media_source": "themoviedb", "media_id": "88881", "title": "合同事件整理4K", "type": "电视剧"},
+            meta={"begin_season": 1, "resource_pix": "2160p"},
+            transferinfo=None,
+            fileitem=None,
+        )
+        self.plugin.on_transfer_complete(sys.modules["app.sdk.events"].Event(transfer_payload))
+        self.assertIn("仅4K", sub1.filter_groups)
+
+        # Simulate V3 DownloadAddedContractData object (non-dict) for DownloadAdded
+        dl_payload = types.SimpleNamespace(
+            context=types.SimpleNamespace(
+                media_info=types.SimpleNamespace(source=None, tmdb_id=88882, douban_id=None, title="合同事件下载4K", type="电视剧"),
+                meta_info=types.SimpleNamespace(begin_season=1, resource_pix=None),
+                torrent_info=types.SimpleNamespace(title="Show S01E02 2160p WEB-DL", description=""),
+            )
+        )
+        self.plugin.on_download_added(sys.modules["app.sdk.events"].Event(dl_payload))
+        self.assertIn("仅4K", sub2.filter_groups)
+
     def test_aborts_safely_when_strict_group_missing(self) -> None:
         sub = _FakeSub(id=404, name="安全测试")
         self.state["subscribes"] = [sub]
