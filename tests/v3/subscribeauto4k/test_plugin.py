@@ -34,7 +34,7 @@ def _install_mock_moviepilot_sdk() -> Dict[str, Any]:
 
     class MediaSource(Enum):
         TMDB = "themoviedb"
-        DOUBAN = "douban"
+        Douban = "douban"
 
     class NotificationType(Enum):
         Subscribe = "订阅"
@@ -115,7 +115,7 @@ def _install_mock_moviepilot_sdk() -> Dict[str, Any]:
         if str(val or "").lower() in ("themoviedb", "tmdb"):
             return MediaSource.TMDB
         if str(val or "").lower() == "douban":
-            return MediaSource.DOUBAN
+            return MediaSource.Douban
         return None
 
     class RuleHelper:
@@ -331,6 +331,7 @@ class SubscribeAuto4KTests(unittest.TestCase):
         media_202 = sys.modules["app.sdk.media"].MediaInfo()
         media_202.title = "热播剧"
         media_202.tmdb_id = 20202
+        media_202.douban_id = "36000001"
         self.state["cache_candidates"] = [
             types.SimpleNamespace(
                 media_info=media_202,

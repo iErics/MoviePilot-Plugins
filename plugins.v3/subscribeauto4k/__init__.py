@@ -220,7 +220,7 @@ class SubscribeAuto4K(_PluginBase):
         "自动追加仅4K规则组收紧订阅，并洗版此前的低分辨率剧集。"
     )
     plugin_icon = "teamwork.png"
-    plugin_version = "2.0.6"
+    plugin_version = "2.0.7"
     plugin_author = "iErics"
     author_url = "https://github.com/iErics"
     plugin_config_prefix = "subscribeauto4k_"
@@ -1393,7 +1393,7 @@ class SubscribeAuto4K(_PluginBase):
             if tmdb_id not in (None, "", 0, "0"):
                 media_source = MediaSource.TMDB
             elif douban_id not in (None, "", 0, "0"):
-                media_source = MediaSource.DOUBAN
+                media_source = MediaSource.Douban
         media_id_str = str(media_id).strip() if media_id not in (None, "", 0, "0") else None
         season = _get_field(meta, "begin_season")
         mtype = _get_field(mediainfo, "type")
@@ -1505,7 +1505,7 @@ class SubscribeAuto4K(_PluginBase):
             keys.append((MediaSource.TMDB.value, str(tmdb_id)))
         douban_id = getattr(mediainfo, "douban_id", None)
         if douban_id not in (None, "", 0, "0"):
-            keys.append((MediaSource.DOUBAN.value, str(douban_id)))
+            keys.append((MediaSource.Douban.value, str(douban_id)))
         src = normalize_media_source(getattr(mediainfo, "source", None))
         mid = getattr(mediainfo, "media_id", None)
         if src and mid not in (None, "", 0, "0"):
@@ -1910,7 +1910,7 @@ class SubscribeAuto4K(_PluginBase):
                     kwargs["media_id"] = sub.media_id
                 elif sub.media_source == MediaSource.TMDB and "tmdbid" in params and sub.media_id.isdigit():
                     kwargs["tmdbid"] = int(sub.media_id)
-                elif sub.media_source == MediaSource.DOUBAN and "doubanid" in params:
+                elif sub.media_source == MediaSource.Douban and "doubanid" in params:
                     kwargs["doubanid"] = sub.media_id
 
             recognized = recognize(**kwargs)
@@ -1926,7 +1926,7 @@ class SubscribeAuto4K(_PluginBase):
             info.year = sub.year
             if sub.media_source == MediaSource.TMDB and sub.media_id and sub.media_id.isdigit():
                 info.tmdb_id = int(sub.media_id)
-            elif sub.media_source == MediaSource.DOUBAN and sub.media_id:
+            elif sub.media_source == MediaSource.Douban and sub.media_id:
                 info.douban_id = sub.media_id
             return info
         except Exception:
